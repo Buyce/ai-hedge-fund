@@ -13,27 +13,33 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
-from datetime import datetime
+from datetime import datetime, timedelta
 from google import genai
 from google.genai import types
 
-# --- 0. DATABASE LOGIC (NOW WITH RATE LIMITING) ---
+# --- 0. SUPER USERS ---
+SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
+
+# --- 1. DATABASE & QUOTA LOGIC ---
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    # Leads table
+    # Leads Tracking
     c.execute('''CREATE TABLE IF NOT EXISTS leads 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   email TEXT, 
                   target_ticker TEXT,
                   timestamp TEXT)''')
-    # Usage tracking table for 48-hour limits
-    c.execute('''CREATE TABLE IF NOT EXISTS usage_logs
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  email TEXT,
-                  is_premium INTEGER,
-                  report_count INTEGER,
-                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    # 48-Hour Usage Tracking
+    c.execute('''CREATE TABLE IF NOT EXISTS usage_logs 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  email TEXT, 
+                  run_timestamp TEXT,
+                  is_premium BOOLEAN,
+                  report_count INTEGER)''')
+    # Email Alert Throttling
+    c.execute('''CREATE TABLE IF NOT EXISTS alerts 
+                 (email TEXT, alert_type TEXT, timestamp TEXT)''')
     conn.commit()
     conn.close()
 
@@ -41,59 +47,77 @@ def save_lead(email, ticker):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
     c.execute("INSERT INTO leads (email, target_ticker, timestamp) VALUES (?, ?, ?)", 
-              (email, ticker, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+              (email, ticker, datetime.now().isoformat()))
     conn.commit()
     conn.close()
+
+def get_usage(email):
+    """Calculates usage precisely over the last 48 hours."""
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    forty_eight_hours_ago = (datetime.now() - timedelta(hours=48)).isoformat()
+    
+    c.execute("SELECT is_premium, report_count FROM usage_logs WHERE email=? AND run_timestamp >= ?", 
+              (email, forty_eight_hours_ago))
+    rows = c.fetchall()
+    conn.close()
+    
+    p_runs = 0
+    p_reps = 0
+    s_reps = 0
+    
+    for is_premium, count in rows:
+        if is_premium:
+            p_runs += 1
+            p_reps += count
+        else:
+            s_reps += count
+            
+    return p_runs, p_reps, s_reps
 
 def log_usage(email, is_premium, report_count):
+    """Logs successful generation runs."""
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute("INSERT INTO usage_logs (email, is_premium, report_count) VALUES (?, ?, ?)", 
-              (email.strip().lower(), int(is_premium), report_count))
+    c.execute("INSERT INTO usage_logs (email, run_timestamp, is_premium, report_count) VALUES (?, ?, ?, ?)",
+              (email, datetime.now().isoformat(), is_premium, report_count))
     conn.commit()
     conn.close()
 
-def check_usage_limits(email, is_premium, requested_reports_count):
-    email_clean = email.strip().lower()
-    super_users = ['boatengampomah@gmail.com', 'emcheix@gmail.com']
-    
-    # 1. Superuser Bypass
-    if email_clean in super_users:
-        return True, ""
-    
+def send_limit_email(email, limit_msg):
+    """Sends an alert if blocked, throttled to 1 email per 24h to avoid spam."""
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
+    twenty_four_hours_ago = (datetime.now() - timedelta(hours=24)).isoformat()
     
-    # 2. Check Premium Runs (last 48 hours)
-    c.execute("SELECT COUNT(*) FROM usage_logs WHERE email = ? AND is_premium = 1 AND timestamp >= datetime('now', '-48 hours')", (email_clean,))
-    premium_runs = c.fetchone()[0]
-    
-    # 3. Check Total Reports (last 48 hours)
-    c.execute("SELECT SUM(report_count) FROM usage_logs WHERE email = ? AND timestamp >= datetime('now', '-48 hours')", (email_clean,))
-    total_reports_row = c.fetchone()
-    total_reports = total_reports_row[0] if total_reports_row[0] is not None else 0
-    
-    conn.close()
-    
-    # --- EVALUATE LIMITS ---
-    if is_premium:
-        if requested_reports_count > 6:
-            return False, "⚠️ **Premium Limit Exceeded:** You can only select a maximum of **6 reports** per run when using Gemini Pro or Deep Search. Please deselect some reports."
-        if premium_runs >= 4:
-            return False, "⚠️ **Premium Limit Exceeded:** You have exhausted your 4 premium runs for this 48-hour period. Please switch your Engine to **Flash Lite** and your Search Tool to **Standard Search/Yahoo Finance** to continue."
+    c.execute("SELECT COUNT(*) FROM alerts WHERE email=? AND alert_type='limit' AND timestamp >= ?", (email, twenty_four_hours_ago))
+    if c.fetchone()[0] == 0:
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = f"AI Hedge Fund <{st.secrets['EMAIL_SENDER']}>"
+            msg['To'] = email
+            msg['Subject'] = "Action Required: AI Hedge Fund Usage Limit Reached"
+            body = f"Hello,\n\nYou have reached a usage limit on the AI Hedge Fund platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nAI Hedge Fund Analyst Team"
+            msg.attach(MIMEText(body, 'plain'))
             
-    if total_reports + requested_reports_count > 30:
-        remaining = max(0, 30 - total_reports)
-        return False, f"⚠️ **Usage Limit Exceeded:** You have generated {total_reports} reports in the last 48 hours. You only have **{remaining}** reports remaining in your quota (Limit: 30). Please select fewer reports or try again later."
-        
-    return True, ""
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(st.secrets['EMAIL_SENDER'], st.secrets['EMAIL_PASSWORD'])
+            server.send_message(msg)
+            server.quit()
+            
+            c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, 'limit', datetime.now().isoformat()))
+            conn.commit()
+        except Exception as e:
+            pass
+    conn.close()
 
 init_db()
 
-# --- 1. SET UP THE WEB PAGE ---
+# --- 2. SET UP THE WEB PAGE ---
 st.set_page_config(page_title="AI Hedge Fund", page_icon="📈", layout="wide")
 
-# --- 2. PERSISTENT BACKGROUND ENGINE ---
+# --- 3. PERSISTENT BACKGROUND ENGINE ---
 @st.cache_resource
 def get_task_registry():
     return {} 
@@ -129,7 +153,7 @@ def fetch_ceo_from_ticker():
             pass
     st.session_state.auto_ceo = ""
 
-# --- 3. INSTITUTIONAL PROMPT LIBRARY ---
+# --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
@@ -338,10 +362,11 @@ ceo_agents = ["CEO - Track Record & Capital Allocation"]
 
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
+
 st.title("📈 AI Hedge Fund Analyst")
 st.markdown("Generate institutional-grade financial, strategic, and macro research.")
 
-# --- 4. THE SIDEBAR (ADMIN ONLY NOW) ---
+# --- 5. ADMIN SIDEBAR ---
 with st.sidebar:
     st.header("🔐 Admin Dashboard")
     st.info("Regular users do not need to access this menu.")
@@ -349,21 +374,32 @@ with st.sidebar:
     if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
         st.success("Authenticated")
         conn = sqlite3.connect('users.db')
-        
-        st.markdown("### Leads")
-        df_leads = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-        st.dataframe(df_leads, use_container_width=True)
-        st.download_button("📥 Export Leads", df_leads.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
-        
-        st.markdown("### Usage Logs (Rate Limits)")
-        df_usage = pd.read_sql_query("SELECT * FROM usage_logs ORDER BY id DESC", conn)
-        st.dataframe(df_usage, use_container_width=True)
-        
+        df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+        st.dataframe(df, use_container_width=True)
+        st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
         conn.close()
 
-# --- 5. MAIN UI (MOBILE OPTIMIZED) ---
+# --- 6. MAIN UI (MOBILE OPTIMIZED) ---
 st.markdown("### Step 1: Target Information")
 user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
+user_email_clean = user_email.strip().lower()
+
+# LIVE QUOTA DASHBOARD
+is_super_user = user_email_clean in SUPER_USERS
+if user_email_clean and "@" in user_email_clean:
+    if is_super_user:
+        st.success("🌟 Super User Access: Unlimited Reports Available")
+    else:
+        p_runs, p_reps, s_reps = get_usage(user_email_clean)
+        rem_p_runs = max(0, 4 - p_runs)
+        rem_p_reps = max(0, 6 - p_reps)
+        rem_s_reps = max(0, 30 - s_reps)
+        
+        st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
+        q1, q2, q3 = st.columns(3)
+        q1.metric("Premium Runs", f"{rem_p_runs} / 4")
+        q2.metric("Premium Reports", f"{rem_p_reps} / 6")
+        q3.metric("Standard Reports", f"{rem_s_reps} / 30")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -394,12 +430,13 @@ st.markdown("### Step 3: Select Reports")
 selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=list(gem_prompts.keys()))
 st.markdown("---")
 
-# --- 6. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
-def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd):
+# --- 7. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
+def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run):
     global_tasks[email]["progress"] = "Initializing & Auto-Resolving Missing Data..."
     client = genai.Client(api_key=api_key)
     reports = {}
     
+    # --- AUTO-RESOLVER ---
     resolved_ticker = ticker.strip().upper()
     resolved_company = company.strip()
     resolved_ceo = ceo.strip()
@@ -536,12 +573,23 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
             doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
             zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode('utf-8'))
     
+    # --- POST-RUN LIMIT CHECK WARNING ---
+    warning_msg = ""
+    is_super = email in SUPER_USERS
+    if not is_super:
+        p_runs, p_reps, s_reps = get_usage(email)
+        if is_premium_run and (p_runs >= 4 or p_reps >= 6):
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features. You will not be able to run Deep Research or Gemini Pro for the next 48 hours."
+        elif not is_premium_run and s_reps >= 30:
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features. You will not be able to generate standard reports for the next 48 hours."
+
     try:
         msg = MIMEMultipart()
         msg['From'] = f"AI Hedge Fund <{email_sender}>"
         msg['To'] = email
         msg['Subject'] = f"🚀 Analysis Complete: {resolved_company}"
-        msg.attach(MIMEText(f"Your specific requested research for {resolved_company} is attached.", 'plain'))
+        body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
+        msg.attach(MIMEText(body, 'plain'))
         
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(zip_buffer.getvalue())
@@ -559,7 +607,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
 
     global_tasks[email]["status"] = "complete"
 
-# --- 7. RUN BUTTON & POLLING LOOP ---
+# --- 8. RUN BUTTON & BILLING GATEKEEPER ---
 if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True):
     if not user_email or "@" not in user_email:
         st.error("Please enter a valid email address.")
@@ -569,18 +617,7 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.error("Please select at least one report to generate.")
         st.stop()
 
-    # --- CHECK USAGE LIMITS ---
-    is_premium_run = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
-    allowed, limit_error_msg = check_usage_limits(user_email, is_premium_run, len(selected_prompts))
-    
-    if not allowed:
-        st.error(limit_error_msg)
-        st.stop()
-
-    # --- SMART VALIDATION ---
-    stock_agents = [p for p in gem_prompts.keys() if p not in concept_agents + ceo_agents + industry_agents]
-    
-    needs_stock = any(p in stock_agents for p in selected_prompts)
+    needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
     needs_industry = any(p in industry_agents for p in selected_prompts)
     needs_ceo = any(p in ceo_agents for p in selected_prompts)
     needs_concept = any(p in concept_agents for p in selected_prompts)
@@ -598,24 +635,51 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.error("The AI Education report requires a Financial Concept.")
         st.stop()
 
-    safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
-
-    # Proceed and Log Usage
-    save_lead(user_email, safe_ticker_for_file)
-    log_usage(user_email, is_premium_run, len(selected_prompts))
+    # --- ENFORCE QUOTAS BEFORE RUNNING ---
+    is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
+    num_requested = len(selected_prompts)
     
-    global_tasks[user_email] = {"status": "running", "progress": "Starting...", "reports": {}, "ticker": safe_ticker_for_file}
+    if not is_super_user:
+        p_runs, p_reps, s_reps = get_usage(user_email_clean)
+        
+        if is_premium_request:
+            if p_runs >= 4:
+                msg = "You have exhausted your 4 Premium runs for the last 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+            if p_reps + num_requested > 6:
+                rem = max(0, 6 - p_reps)
+                msg = f"You requested {num_requested} Premium reports, but only have {rem} remaining for the next 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+        else:
+            if s_reps + num_requested > 30:
+                rem = max(0, 30 - s_reps)
+                msg = f"You requested {num_requested} Standard reports, but only have {rem} remaining for the next 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+                
+    # IF PASSED, DEDUCT QUOTA
+    log_usage(user_email_clean, is_premium_request, num_requested)
+
+    safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
+    save_lead(user_email_clean, safe_ticker_for_file)
+    
+    global_tasks[user_email_clean] = {"status": "running", "progress": "Starting...", "reports": {}, "ticker": safe_ticker_for_file}
     
     background_executor.submit(
         execute_background_job, 
-        user_email, target_ticker, target_company, target_industry, target_ceo, target_concept, 
+        user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, 
         selected_prompts, selected_brain, tool_choice, 
-        st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"]
+        st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request
     )
 
-# --- 8. UI STATE DISPLAY ---
-if user_email in global_tasks:
-    task = global_tasks[user_email]
+# --- 9. UI STATE DISPLAY ---
+if user_email_clean in global_tasks:
+    task = global_tasks[user_email_clean]
     
     if task["status"] == "running":
         st.info(f"⏳ **Running:** {task['progress']}")
