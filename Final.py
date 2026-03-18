@@ -81,8 +81,8 @@ def fetch_ceo_from_ticker():
 # --- 3. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
-    "Macro understanding of each stock": """ROLE: You are a quantitative fundamental analyst.
-Using the provided financial data,Yahoo finance data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
+    "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
+Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
 1. FINANCIAL TRAJECTORY: Analyze the 3-5 year trend for Revenue, Gross Margins, Operating Margins (EBIT), and Net Income. Are margins expanding or compressing? Why?
 2. CASH & CAPITAL ALLOCATION: Evaluate Free Cash Flow (FCF) generation. How is management deploying capital? (Are they hoarding cash, paying dividends, buying back shares, or aggressively doing M&A/Capex?)
@@ -93,8 +93,8 @@ TASKS:
 4. ROIC & EFFICIENCY: Assess their Return on Invested Capital (ROIC) vs their Weighted Average Cost of Capital (WACC) if data allows. Are they actually creating value, or just growing for the sake of growth?
 OUTPUT FORMAT: Use heavy formatting, bullet points, and bold text for readability. Output the *story* those numbers tell. End with a 1-sentence "Financial Health Verdict".""",
 
-    "Ticker Analyst": """ROLE: You are the Lead Portfolio Manager and Senior Equity Analyst covering [STOCK NAME] ([TICKER]).
-You are synthesizing all provided research and Yahoo finance data into a final, actionable investment memo. 
+    "Company - Final Investment Memo & Rating": """ROLE: You are the Lead Portfolio Manager and Senior Equity Analyst covering [STOCK NAME] ([TICKER]).
+You are synthesizing all provided research into a final, actionable investment memo. 
 CRITICAL RULES:
 - Base your analysis ONLY on the provided research context and market data.
 - Never present inferences as facts. Mark interpretations clearly.
@@ -108,7 +108,7 @@ OUTPUT STRUCTURE:
 6. FINAL VERDICT: A concluding paragraph summarizing the risk/reward asymmetry.""",
 
     # --- INDUSTRY AGENTS ---
-    "Macro strategist prompt": """ROLE: Senior Macro Strategist at a Global Macro Hedge Fund.
+    "Industry - Macro Environment & Strategic Outlook": """ROLE: Senior Macro Strategist at a Global Macro Hedge Fund.
 TASK: Produce a data-driven sector intelligence report for [INSERT INDUSTRY]. Focus on regime changes, capital flows, and structural shifts, not just generic trends.
 OUTPUT STRUCTURE:
 1. THE MACRO REGIME: How do current interest rates, inflation expectations, and liquidity cycles specifically aid or choke this industry?
@@ -118,7 +118,7 @@ OUTPUT STRUCTURE:
 5. STRATEGIC ALLOCATION: Base Case, Bull Case, and Bear Case for the next 5 years. What is the explicit catalyst that shifts the sector from Base to Bear?
 RULES: Use bullet points. Be explicitly quantitative where possible. Avoid generic corporate jargon.""",
 
-    "Growth & Future Industry analyst and strategist": """ROLE: Innovation & Thematic Analyst (ARK Invest style).
+    "Industry - Future Growth & Disruption Scenarios": """ROLE: Innovation & Thematic Analyst (ARK Invest style).
 TASK: Project the 5-10 year future for [Industry Name], focusing on Wright's Law (cost declines), technological convergence, and TAM expansion.
 OUTPUT STRUCTURE:
 1. STRUCTURAL GROWTH DRIVERS: What is the primary catalyst driving adoption? (e.g., cost curve crossing parity with legacy tech, regulatory mandate).
@@ -127,7 +127,7 @@ OUTPUT STRUCTURE:
 4. EMERGING BUSINESS MODELS: How will companies monetize this? (Hardware sales, recurring software, data licensing).
 5. THE 10-YEAR SCENARIO: Base, Bull, and Bear cases with assigned probabilities. Identify the single most important leading indicator to track to know which scenario is unfolding.""",
 
-    "Industry Overview": """ROLE: Top-Tier Management Consultant (McKinsey/Bain style).
+    "Industry - Core Economics & Market Structure": """ROLE: Top-Tier Management Consultant (McKinsey/Bain style).
 TASK: Provide a masterclass overview of the [Insert Industry Name] industry. Focus on unit economics and value creation.
 OUTPUT STRUCTURE:
 1. CORE ECONOMIC ENGINE: What is the fundamental customer problem, and how exactly does the industry monetize the solution?
@@ -137,7 +137,7 @@ OUTPUT STRUCTURE:
 5. CONSOLIDATION STAGE: Is this a fragmented market ripe for roll-ups, or an entrenched oligopoly?
 6. INVESTOR SYNTHESIS: Provide 4 bullet points detailing what makes a "winner" in this space.""",
 
-    "Decode industry architecture": """ROLE: Senior Sector Analyst.
+    "Industry - Business Models & Ecosystem Architecture": """ROLE: Senior Sector Analyst.
 TASK: Decode the underlying business architecture and power dynamics of [INSERT INDUSTRY NAME].
 OUTPUT STRUCTURE:
 1. THE ECOSYSTEM MAP: Who are the raw material providers, the core operators, the distributors, and the end-users?
@@ -146,7 +146,7 @@ OUTPUT STRUCTURE:
 4. THE ENABLERS: What secondary industries or tools are absolute prerequisites for this industry to function? 
 5. KEY PERFORMANCE INDICATORS (KPIs): Define the 3 non-standard metrics that truly separate top-quartile operators from the rest.""",
 
-    "Industry value chain Stocks": """ROLE: Hedge Fund Portfolio Manager.
+    "Industry - Value Chain Mapping & Key Players": """ROLE: Hedge Fund Portfolio Manager.
 TASK: Map the [Industry Name] value chain using 5-10 publicly traded companies.
 OUTPUT STRUCTURE:
 1. VALUE CHAIN OVERVIEW: Briefly describe the flow of value from upstream (raw/components) to downstream (end consumer).
@@ -157,7 +157,7 @@ OUTPUT STRUCTURE:
    - Estimated pricing power/leverage over the rest of the chain.
 3. PROFITABILITY SKEW: Explicitly state which part of this value chain captures the highest Return on Capital, and why investors should care.""",
 
-    "industry economist and operations analyst": """ROLE: Operations & Supply Chain Analyst.
+    "Industry - Unit Economics & Operating Leverage": """ROLE: Operations & Supply Chain Analyst.
 TASK: Deconstruct the operational mechanics and unit economics of [Industry Name].
 OUTPUT STRUCTURE:
 1. UNIT ECONOMICS: How exactly is a dollar of revenue generated and consumed? Break down fixed vs. variable costs.
@@ -167,7 +167,7 @@ OUTPUT STRUCTURE:
 5. VULNERABILITIES: What is the single point of failure in operations? (e.g., union labor strikes, specific rare earth metals, logistics bottlenecks).
 6. THE TOP-QUARTILE OPERATOR: What specific operational decisions allow the best companies in this space to generate superior margins?""",
 
-    "Map the Industry Macro dynamics": """ROLE: Geopolitical and Strategic Analyst.
+    "Industry - Geopolitics, Regulation & TAM": """ROLE: Geopolitical and Strategic Analyst.
 TASK: Map the structural macro dynamics for [INSERT INDUSTRY NAME].
 OUTPUT STRUCTURE:
 1. TAM & GROWTH VELOCITY: Real current market size and 5-year CAGR expectations. Is the TAM actually expanding, or is it a zero-sum battle for market share?
@@ -177,7 +177,7 @@ OUTPUT STRUCTURE:
 5. MILESTONE TIMELINE: List 3 historical events that permanently altered this industry, and project 1 future event that could disrupt it again.""",
 
     # --- CONCEPT AGENTS ---
-    "AI edu for long-term investors": """ROLE: Director of Research training incoming Hedge Fund Analysts.
+    "Concept - Investment Education & Metric Breakdown": """ROLE: Director of Research training incoming Hedge Fund Analysts.
 TASK: Deconstruct the concept of {CONCEPT NAME} for a smart investor.
 OUTPUT STRUCTURE:
 1. THE NAKED TRUTH: A 1-sentence, jargon-free definition.
@@ -188,7 +188,7 @@ OUTPUT STRUCTURE:
 6. 3 METRICS TO CROSS-REFERENCE: What other data points must you check to ensure this concept isn't painting a false picture?""",
 
     # --- CEO AGENTS ---
-    "CEO Track Record": """ROLE: Institutional Activist Investor.
+    "CEO - Track Record & Capital Allocation": """ROLE: Institutional Activist Investor.
 TASK: Produce a ruthless, evidence-based dossier on {{CEO Name}} at {{Company Name}}.
 OUTPUT STRUCTURE:
 1. ARCHETYPE: Is this CEO a Founder/Visionary, a Turnaround Operator, an Empire Builder, or a Bureaucratic Manager? 
@@ -199,7 +199,7 @@ OUTPUT STRUCTURE:
 VERDICT: Is this CEO a compounder of capital or a risk to the thesis?""",
 
     # --- STOCK BASE AGENTS ---
-    "Quality of management and its incentives": """ROLE: Activist Investor / Corporate Governance Analyst.
+    "Company - Management Quality & Insider Incentives": """ROLE: Activist Investor / Corporate Governance Analyst.
 TASK: Perform a ruthless evaluation of [Company_name]'s management alignment with minority shareholders.
 OUTPUT STRUCTURE: Render a verdict (ALIGNED / MIXED / MISALIGNED) based on:
 1. SKIN IN THE GAME: Evaluate insider ownership. Are they buying stock on the open market, or only receiving RSUs/Options? Are they dumping shares?
@@ -208,7 +208,7 @@ OUTPUT STRUCTURE: Render a verdict (ALIGNED / MIXED / MISALIGNED) based on:
 4. CANDOR & INTEGRITY: Does management admit mistakes in their letters/calls, or do they blame "macro headwinds"? 
 VERDICT: Summarize the risk of management destroying shareholder value.""",
 
-    "Company Competitive Dynamics": """ROLE: Private Equity Strategy Director.
+    "Company - Moat Analysis & Competitive Dynamics (7 Powers)": """ROLE: Private Equity Strategy Director.
 TASK: Evaluate [company_name] through the lens of Hamilton Helmer's 7 Powers and true economic moats.
 OUTPUT STRUCTURE:
 Score each of the 7 Powers (None, Weak, Developing, Strong) with explicit justification:
@@ -221,7 +221,7 @@ Score each of the 7 Powers (None, Weak, Developing, Strong) with explicit justif
 7. PROCESS POWER: Is their operational efficiency structural and impossible to replicate quickly?
 CONCLUSION: Is the moat expanding or shrinking? What breaks the moat?""",
 
-    "Read financial statement like Warren Buffet": """ROLE: Warren Buffett & Charlie Munger. You seek absolute truth, focusing on Owner's Earnings and downside protection.
+    "Company - Warren Buffett Financial Statement Breakdown": """ROLE: Warren Buffett & Charlie Munger. You seek absolute truth, focusing on Owner's Earnings and downside protection.
 TASK: Analyze the financials of {Company_Name}. Strip away the GAAP accounting illusions.
 OUTPUT STRUCTURE:
 1. BALANCE SHEET (THE FORTRESS TEST):
@@ -238,7 +238,7 @@ OUTPUT STRUCTURE:
 - Share count: Are they retiring shares meaningfully?
 VERDICT: Provide a Traffic Light (Green/Yellow/Red) for Balance Sheet, Earnings Quality, and Cash Generation.""",
 
-    "Growth rate analysis": """ROLE: Skeptical Fundamental Equity Analyst.
+    "Company - Revenue Decomposition & Organic Growth": """ROLE: Skeptical Fundamental Equity Analyst.
 TASK: Deconstruct the revenue growth of [Insert stock]. Separate the illusion of growth from true, durable organic growth.
 OUTPUT STRUCTURE:
 1. THE GROWTH EQUATION: Break down revenue growth into strictly: Price Increases + Volume Growth + Mix Shift + M&A.
@@ -248,7 +248,7 @@ OUTPUT STRUCTURE:
 5. DURABILITY CHECK: Is current growth pulled forward (e.g., pandemic boom, temporary stimulus), cyclical, or structural? 
 VERDICT: What must remain true for this growth rate to persist for 3 more years? What is the highest risk to the top line?""",
 
-    "DEEP BUSINESS ANALYSIS OF A PUBLIC COMPANY": """ROLE: Private Equity Buyout Director.
+    "Company - Deep Business Model & Buyout Due Diligence": """ROLE: Private Equity Buyout Director.
 TASK: Perform a deep-dive due diligence on [Company_name] as if we are acquiring 100% of the equity, taking it private, and holding it for 10 years.
 OUTPUT STRUCTURE:
 1. BUSINESS QUALITY: What is the exact nature of the revenue? (Recurring vs. Transactional). Are the gross margins high enough to absorb operational shocks?
@@ -258,7 +258,7 @@ OUTPUT STRUCTURE:
 5. THE TERMINAL RISK: If this business is bankrupt in 10 years, write the obituary today. What killed it? (Technology, regulation, debt, competition).
 VERDICT: Is this a "wonderful business at a fair price" or a "cigar-butt"? """,
 
-    "forensic accounting": """ROLE: Forensic CPA and Short-Seller Analyst.
+    "Company - Forensic Accounting & Solvency Risk": """ROLE: Forensic CPA and Short-Seller Analyst.
 TASK: Tear apart the financials of [Company Name]. Look for manipulation, aggressive accounting, and hidden insolvency risk.
 OUTPUT STRUCTURE:
 1. QUALITY OF EARNINGS: Is Net Income wildly diverging from Operating Cash Flow? Are they pulling forward revenue or delaying expenses?
@@ -269,10 +269,21 @@ OUTPUT STRUCTURE:
 VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candidate). Detail the precise mechanism that would trigger a collapse."""
 }
 
-dependent_agents = ["Ticker Analyst", "Macro understanding of each stock"]
-industry_agents = ["Macro strategist prompt", "Growth & Future Industry analyst and strategist", "Industry Overview", "Decode industry architecture", "Industry value chain Stocks", "industry economist and operations analyst", "Map the Industry Macro dynamics"]
-concept_agents = ["AI edu for long-term investors"]
-ceo_agents = ["CEO Track Record"]
+dependent_agents = [
+    "Company - Financial Trajectory & Macro Sensitivity", 
+    "Company - Final Investment Memo & Rating"
+]
+industry_agents = [
+    "Industry - Macro Environment & Strategic Outlook", 
+    "Industry - Future Growth & Disruption Scenarios", 
+    "Industry - Core Economics & Market Structure", 
+    "Industry - Business Models & Ecosystem Architecture", 
+    "Industry - Value Chain Mapping & Key Players", 
+    "Industry - Unit Economics & Operating Leverage", 
+    "Industry - Geopolitics, Regulation & TAM"
+]
+concept_agents = ["Concept - Investment Education & Metric Breakdown"]
+ceo_agents = ["CEO - Track Record & Capital Allocation"]
 
 # We define exactly which base stock agents act as feeders for the dependent agents.
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
@@ -396,7 +407,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                                      .replace("[Insert stock]", resolved_ticker) \
                                      .replace("{CONCEPT NAME}", concept)
         
-        # --- NEW: THE UNIVERSAL DEPTH AND REFERENCE ENFORCER ---
+        # --- THE UNIVERSAL DEPTH AND REFERENCE ENFORCER ---
         instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into the raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report. MANDATORY: At the very bottom of your report, include a 'SOURCES & REFERENCES' section listing every document, financial filing, or dataset you used to generate these findings."
 
         try:
