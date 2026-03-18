@@ -20,97 +20,117 @@ from google.genai import types
 # --- 0. SUPER USERS ---
 SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
 
-# --- 1. DATABASE & QUOTA LOGIC ---
+# --- 1. SELF-HEALING DATABASE & QUOTA LOGIC ---
 def init_db():
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    # Leads Tracking
-    c.execute('''CREATE TABLE IF NOT EXISTS leads 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  email TEXT, 
-                  target_ticker TEXT,
-                  timestamp TEXT)''')
-    # 48-Hour Usage Tracking
-    c.execute('''CREATE TABLE IF NOT EXISTS usage_logs 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  email TEXT, 
-                  run_timestamp TEXT,
-                  is_premium BOOLEAN,
-                  report_count INTEGER)''')
-    # Email Alert Throttling
-    c.execute('''CREATE TABLE IF NOT EXISTS alerts 
-                 (email TEXT, alert_type TEXT, timestamp TEXT)''')
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        # Leads Tracking
+        c.execute('''CREATE TABLE IF NOT EXISTS leads 
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                      email TEXT, 
+                      target_ticker TEXT,
+                      timestamp TEXT)''')
+        # 48-Hour Usage Tracking
+        c.execute('''CREATE TABLE IF NOT EXISTS usage_logs 
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                      email TEXT, 
+                      run_timestamp TEXT,
+                      is_premium BOOLEAN,
+                      report_count INTEGER)''')
+        # Email Alert Throttling
+        c.execute('''CREATE TABLE IF NOT EXISTS alerts 
+                     (email TEXT, alert_type TEXT, timestamp TEXT)''')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        pass
 
 def save_lead(email, ticker):
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO leads (email, target_ticker, timestamp) VALUES (?, ?, ?)", 
-              (email, ticker, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
+    init_db()
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO leads (email, target_ticker, timestamp) VALUES (?, ?, ?)", 
+                  (email, ticker, datetime.now().isoformat()))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 def get_usage(email):
-    """Calculates usage precisely over the last 48 hours."""
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    forty_eight_hours_ago = (datetime.now() - timedelta(hours=48)).isoformat()
-    
-    c.execute("SELECT is_premium, report_count FROM usage_logs WHERE email=? AND run_timestamp >= ?", 
-              (email, forty_eight_hours_ago))
-    rows = c.fetchall()
-    conn.close()
-    
-    p_runs = 0
-    p_reps = 0
-    s_reps = 0
-    
-    for is_premium, count in rows:
-        if is_premium:
-            p_runs += 1
-            p_reps += count
-        else:
-            s_reps += count
-            
-    return p_runs, p_reps, s_reps
+    """Calculates usage precisely over the last 48 hours with failsafes."""
+    init_db() # Force schema check
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        forty_eight_hours_ago = (datetime.now() - timedelta(hours=48)).isoformat()
+        
+        c.execute("SELECT is_premium, report_count FROM usage_logs WHERE email=? AND run_timestamp >= ?", 
+                  (email, forty_eight_hours_ago))
+        rows = c.fetchall()
+        conn.close()
+        
+        p_runs = 0
+        p_reps = 0
+        s_reps = 0
+        
+        for is_premium, count in rows:
+            if is_premium:
+                p_runs += 1
+                p_reps += count
+            else:
+                s_reps += count
+                
+        return p_runs, p_reps, s_reps
+    except Exception:
+        # Failsafe: If DB locks or table is missing on cloud reboot, default to 0 usage to prevent crash
+        return 0, 0, 0
 
 def log_usage(email, is_premium, report_count):
     """Logs successful generation runs."""
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO usage_logs (email, run_timestamp, is_premium, report_count) VALUES (?, ?, ?, ?)",
-              (email, datetime.now().isoformat(), is_premium, report_count))
-    conn.commit()
-    conn.close()
+    init_db()
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO usage_logs (email, run_timestamp, is_premium, report_count) VALUES (?, ?, ?, ?)",
+                  (email, datetime.now().isoformat(), is_premium, report_count))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 def send_limit_email(email, limit_msg):
     """Sends an alert if blocked, throttled to 1 email per 24h to avoid spam."""
-    conn = sqlite3.connect('users.db')
-    c = conn.cursor()
-    twenty_four_hours_ago = (datetime.now() - timedelta(hours=24)).isoformat()
-    
-    c.execute("SELECT COUNT(*) FROM alerts WHERE email=? AND alert_type='limit' AND timestamp >= ?", (email, twenty_four_hours_ago))
-    if c.fetchone()[0] == 0:
-        try:
-            msg = MIMEMultipart()
-            msg['From'] = f"AI Hedge Fund <{st.secrets['EMAIL_SENDER']}>"
-            msg['To'] = email
-            msg['Subject'] = "Action Required: AI Hedge Fund Usage Limit Reached"
-            body = f"Hello,\n\nYou have reached a usage limit on the AI Hedge Fund platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nAI Hedge Fund Analyst Team"
-            msg.attach(MIMEText(body, 'plain'))
-            
-            server = smtplib.SMTP("smtp.gmail.com", 587)
-            server.starttls()
-            server.login(st.secrets['EMAIL_SENDER'], st.secrets['EMAIL_PASSWORD'])
-            server.send_message(msg)
-            server.quit()
-            
-            c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, 'limit', datetime.now().isoformat()))
-            conn.commit()
-        except Exception as e:
-            pass
-    conn.close()
+    init_db()
+    try:
+        conn = sqlite3.connect('users.db')
+        c = conn.cursor()
+        twenty_four_hours_ago = (datetime.now() - timedelta(hours=24)).isoformat()
+        
+        c.execute("SELECT COUNT(*) FROM alerts WHERE email=? AND alert_type='limit' AND timestamp >= ?", (email, twenty_four_hours_ago))
+        if c.fetchone()[0] == 0:
+            try:
+                msg = MIMEMultipart()
+                msg['From'] = f"AI Hedge Fund <{st.secrets['EMAIL_SENDER']}>"
+                msg['To'] = email
+                msg['Subject'] = "Action Required: AI Hedge Fund Usage Limit Reached"
+                body = f"Hello,\n\nYou have reached a usage limit on the AI Hedge Fund platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nAI Hedge Fund Analyst Team"
+                msg.attach(MIMEText(body, 'plain'))
+                
+                server = smtplib.SMTP("smtp.gmail.com", 587)
+                server.starttls()
+                server.login(st.secrets['EMAIL_SENDER'], st.secrets['EMAIL_PASSWORD'])
+                server.send_message(msg)
+                server.quit()
+                
+                c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, 'limit', datetime.now().isoformat()))
+                conn.commit()
+            except Exception:
+                pass
+        conn.close()
+    except Exception:
+        pass
 
 init_db()
 
@@ -373,11 +393,14 @@ with st.sidebar:
     auth_pass = st.text_input("Admin Password", type="password")
     if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
         st.success("Authenticated")
-        conn = sqlite3.connect('users.db')
-        df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-        st.dataframe(df, use_container_width=True)
-        st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
-        conn.close()
+        try:
+            conn = sqlite3.connect('users.db')
+            df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+            st.dataframe(df, use_container_width=True)
+            st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
+            conn.close()
+        except Exception:
+            st.error("Database initializing...")
 
 # --- 6. MAIN UI (MOBILE OPTIMIZED) ---
 st.markdown("### Step 1: Target Information")
@@ -503,7 +526,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                                      .replace("[Insert stock]", resolved_ticker) \
                                      .replace("{CONCEPT NAME}", concept)
         
-        # --- THE UNIVERSAL DEPTH AND REFERENCE ENFORCER ---
         instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into the raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report. MANDATORY: At the very bottom of your report, include a 'SOURCES & REFERENCES' section listing every document, financial filing, or dataset you used to generate these findings."
 
         try:
@@ -573,7 +595,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
             doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
             zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode('utf-8'))
     
-    # --- POST-RUN LIMIT CHECK WARNING ---
     warning_msg = ""
     is_super = email in SUPER_USERS
     if not is_super:
