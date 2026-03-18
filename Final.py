@@ -288,49 +288,56 @@ ceo_agents = ["CEO - Track Record & Capital Allocation"]
 # We define exactly which base stock agents act as feeders for the dependent agents.
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
-# --- 4. THE SIDEBAR (CONFIG & ADMIN) ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    
-    st.subheader("1. Select the Brain")
-    brain_options = {
-        "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview",
-        "Gemini 3.1 Flash Lite (Fast/Cheap)": "gemini-3.1-flash-lite-preview"
-    }
-    selected_brain_label = st.radio("Model Engine:", list(brain_options.keys()))
-    selected_brain = brain_options[selected_brain_label]
-
-    st.subheader("2. Select Search Tool")
-    tool_choice = st.radio("Grounding Method:", ["Standard Google Search", "Deep Research", "Yahoo Finance Data"])
-
-    st.subheader("3. Select Prompts to Fire")
-    selected_prompts = st.multiselect("Choose Reports:", list(gem_prompts.keys()), default=list(gem_prompts.keys()))
-    
-    st.divider()
-    with st.expander("🔐 Admin Dashboard"):
-        auth_pass = st.text_input("Admin Password", type="password")
-        if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
-            st.success("Authenticated")
-            conn = sqlite3.connect('users.db')
-            df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-            st.dataframe(df, use_container_width=True)
-            st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
-            conn.close()
 
 st.title("📈 AI Hedge Fund Analyst")
+st.markdown("Generate institutional-grade financial, strategic, and macro research.")
 
-# --- 5. MAIN UI INPUTS ---
+# --- 4. THE SIDEBAR (ADMIN ONLY NOW) ---
+# The sidebar is hidden on mobile by default, making it perfect for admin settings.
+with st.sidebar:
+    st.header("🔐 Admin Dashboard")
+    st.info("Regular users do not need to access this menu.")
+    auth_pass = st.text_input("Admin Password", type="password")
+    if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
+        st.success("Authenticated")
+        conn = sqlite3.connect('users.db')
+        df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+        st.dataframe(df, use_container_width=True)
+        st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
+        conn.close()
+
+# --- 5. MAIN UI (MOBILE OPTIMIZED) ---
+st.markdown("### Step 1: Target Information")
 user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
 
 col1, col2 = st.columns(2)
 with col1:
     target_company = st.text_input("Company Name (e.g., Tesla):")
     target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_ceo_from_ticker)
+    target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
 with col2:
     target_industry = st.text_input("Industry (e.g., Electric Vehicles):")
     target_ceo = st.text_input("CEO's Name (Optional):", value=st.session_state.auto_ceo)
 
-target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
+st.markdown("---")
+st.markdown("### Step 2: Engine Configuration")
+
+cfg_col1, cfg_col2 = st.columns(2)
+with cfg_col1:
+    brain_options = {
+        "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview",
+        "Gemini 3.1 Flash Lite (Fast/Cheap)": "gemini-3.1-flash-lite-preview"
+    }
+    selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()))
+    selected_brain = brain_options[selected_brain_label]
+
+with cfg_col2:
+    tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Deep Research", "Yahoo Finance Data"])
+
+st.markdown("---")
+st.markdown("### Step 3: Select Reports")
+selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=list(gem_prompts.keys()))
+st.markdown("---")
 
 # --- 6. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
 def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd):
@@ -515,7 +522,7 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.stop()
         
     if not selected_prompts:
-        st.error("Please select at least one report to generate from the sidebar.")
+        st.error("Please select at least one report to generate.")
         st.stop()
 
     # --- SMART VALIDATION ---
