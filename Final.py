@@ -17,15 +17,23 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-# --- 0. DATABASE LOGIC ---
+# --- 0. DATABASE LOGIC (NOW WITH RATE LIMITING) ---
 def init_db():
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
+    # Leads table
     c.execute('''CREATE TABLE IF NOT EXISTS leads 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   email TEXT, 
                   target_ticker TEXT,
                   timestamp TEXT)''')
+    # Usage tracking table for 48-hour limits
+    c.execute('''CREATE TABLE IF NOT EXISTS usage_logs
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT,
+                  is_premium INTEGER,
+                  report_count INTEGER,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
 
@@ -36,6 +44,49 @@ def save_lead(email, ticker):
               (email, ticker, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
+
+def log_usage(email, is_premium, report_count):
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO usage_logs (email, is_premium, report_count) VALUES (?, ?, ?)", 
+              (email.strip().lower(), int(is_premium), report_count))
+    conn.commit()
+    conn.close()
+
+def check_usage_limits(email, is_premium, requested_reports_count):
+    email_clean = email.strip().lower()
+    super_users = ['boatengampomah@gmail.com', 'emcheix@gmail.com']
+    
+    # 1. Superuser Bypass
+    if email_clean in super_users:
+        return True, ""
+    
+    conn = sqlite3.connect('users.db')
+    c = conn.cursor()
+    
+    # 2. Check Premium Runs (last 48 hours)
+    c.execute("SELECT COUNT(*) FROM usage_logs WHERE email = ? AND is_premium = 1 AND timestamp >= datetime('now', '-48 hours')", (email_clean,))
+    premium_runs = c.fetchone()[0]
+    
+    # 3. Check Total Reports (last 48 hours)
+    c.execute("SELECT SUM(report_count) FROM usage_logs WHERE email = ? AND timestamp >= datetime('now', '-48 hours')", (email_clean,))
+    total_reports_row = c.fetchone()
+    total_reports = total_reports_row[0] if total_reports_row[0] is not None else 0
+    
+    conn.close()
+    
+    # --- EVALUATE LIMITS ---
+    if is_premium:
+        if requested_reports_count > 6:
+            return False, "⚠️ **Premium Limit Exceeded:** You can only select a maximum of **6 reports** per run when using Gemini Pro or Deep Search. Please deselect some reports."
+        if premium_runs >= 4:
+            return False, "⚠️ **Premium Limit Exceeded:** You have exhausted your 4 premium runs for this 48-hour period. Please switch your Engine to **Flash Lite** and your Search Tool to **Standard Search/Yahoo Finance** to continue."
+            
+    if total_reports + requested_reports_count > 30:
+        remaining = max(0, 30 - total_reports)
+        return False, f"⚠️ **Usage Limit Exceeded:** You have generated {total_reports} reports in the last 48 hours. You only have **{remaining}** reports remaining in your quota (Limit: 30). Please select fewer reports or try again later."
+        
+    return True, ""
 
 init_db()
 
@@ -285,15 +336,12 @@ industry_agents = [
 concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
 
-# We define exactly which base stock agents act as feeders for the dependent agents.
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
-
 
 st.title("📈 AI Hedge Fund Analyst")
 st.markdown("Generate institutional-grade financial, strategic, and macro research.")
 
 # --- 4. THE SIDEBAR (ADMIN ONLY NOW) ---
-# The sidebar is hidden on mobile by default, making it perfect for admin settings.
 with st.sidebar:
     st.header("🔐 Admin Dashboard")
     st.info("Regular users do not need to access this menu.")
@@ -301,9 +349,16 @@ with st.sidebar:
     if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
         st.success("Authenticated")
         conn = sqlite3.connect('users.db')
-        df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-        st.dataframe(df, use_container_width=True)
-        st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
+        
+        st.markdown("### Leads")
+        df_leads = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+        st.dataframe(df_leads, use_container_width=True)
+        st.download_button("📥 Export Leads", df_leads.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
+        
+        st.markdown("### Usage Logs (Rate Limits)")
+        df_usage = pd.read_sql_query("SELECT * FROM usage_logs ORDER BY id DESC", conn)
+        st.dataframe(df_usage, use_container_width=True)
+        
         conn.close()
 
 # --- 5. MAIN UI (MOBILE OPTIMIZED) ---
@@ -345,7 +400,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     client = genai.Client(api_key=api_key)
     reports = {}
     
-    # --- AUTO-RESOLVER ---
     resolved_ticker = ticker.strip().upper()
     resolved_company = company.strip()
     resolved_ceo = ceo.strip()
@@ -380,7 +434,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     if not resolved_ticker: resolved_ticker = resolved_company
     if not resolved_ceo: resolved_ceo = "the CEO"
 
-    # PRE-FETCH YAHOO FINANCE
     yf_context = ""
     if tool_id == "Yahoo Finance":
         global_tasks[email]["progress"] = f"Fetching Yahoo Finance data for {resolved_ticker}..."
@@ -397,7 +450,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         if agent_name in concept_agents and not concept.strip(): return agent_name, "Skipped: No Concept provided."
         if agent_name in ceo_agents and not resolved_ceo.strip(): return agent_name, "Skipped: No CEO found or provided."
 
-        # THE BULLETPROOF REPLACER 
         instruction = raw_instruction.replace("[STOCK NAME]", resolved_company) \
                                      .replace("[TICKER]", resolved_ticker) \
                                      .replace("[Company_name]", resolved_company) \
@@ -418,13 +470,11 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into the raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report. MANDATORY: At the very bottom of your report, include a 'SOURCES & REFERENCES' section listing every document, financial filing, or dataset you used to generate these findings."
 
         try:
-            # ROUTING LOGIC: STAGE 2 (SYNTHESIS)
             if extra_context and agent_name in dependent_agents:
                 prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
                 res = client.models.generate_content(model='gemini-3.1-pro-preview', contents=prompt, config=types.GenerateContentConfig(temperature=0.1))
                 return agent_name, res.text
             
-            # ROUTING LOGIC: STAGE 1 (RESEARCH)
             if tool_id == "Deep Research":
                 interaction = client.interactions.create(agent='deep-research-pro-preview-12-2025', input=instruction, background=True)
                 while True:
@@ -449,15 +499,12 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         except Exception as e:
             return agent_name, f"Error: {e}"
 
-    # --- DETERMINE ACTUAL EXECUTION REQUIREMENTS ---
     base_prompts_to_run = set([p for p in prompts_to_run if p not in dependent_agents])
     dep_prompts_to_run = [p for p in prompts_to_run if p in dependent_agents]
 
-    # SILENT INJECTION: If they chose a dependent agent, we FORCE the core stock agents into the base loop
     if dep_prompts_to_run:
         base_prompts_to_run.update(stock_base_agents)
 
-    # --- EXECUTE STAGE 1 ---
     if base_prompts_to_run:
         global_tasks[email]["progress"] = f"Stage 1: Gathering necessary research data..."
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
@@ -466,7 +513,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                 name, text = future.result()
                 if text: reports[name] = text
 
-    # --- EXECUTE STAGE 2 ---
     if dep_prompts_to_run:
         global_tasks[email]["progress"] = "Stage 2: Synthesizing final thesis..."
         aggregated_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in reports.items() if "Skipped" not in v and "Error" not in v and k in stock_base_agents])
@@ -477,10 +523,8 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                 name, text = future.result()
                 if text: reports[name] = text
 
-    # --- FILTER FINAL REPORTS FOR THE USER ---
     final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
 
-    # --- COMPILE ZIP AND EMAIL ---
     global_tasks[email]["progress"] = "Compiling ZIP and sending email..."
     global_tasks[email]["reports"] = final_user_reports
     
@@ -525,6 +569,14 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.error("Please select at least one report to generate.")
         st.stop()
 
+    # --- CHECK USAGE LIMITS ---
+    is_premium_run = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
+    allowed, limit_error_msg = check_usage_limits(user_email, is_premium_run, len(selected_prompts))
+    
+    if not allowed:
+        st.error(limit_error_msg)
+        st.stop()
+
     # --- SMART VALIDATION ---
     stock_agents = [p for p in gem_prompts.keys() if p not in concept_agents + ceo_agents + industry_agents]
     
@@ -548,7 +600,9 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
 
     safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
 
+    # Proceed and Log Usage
     save_lead(user_email, safe_ticker_for_file)
+    log_usage(user_email, is_premium_run, len(selected_prompts))
     
     global_tasks[user_email] = {"status": "running", "progress": "Starting...", "reports": {}, "ticker": safe_ticker_for_file}
     
