@@ -25,25 +25,22 @@ def init_db():
     try:
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
-        # Leads Tracking
         c.execute('''CREATE TABLE IF NOT EXISTS leads 
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                       email TEXT, 
                       target_ticker TEXT,
                       timestamp TEXT)''')
-        # 48-Hour Usage Tracking
         c.execute('''CREATE TABLE IF NOT EXISTS usage_logs 
                      (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                       email TEXT, 
                       run_timestamp TEXT,
                       is_premium BOOLEAN,
                       report_count INTEGER)''')
-        # Email Alert Throttling
         c.execute('''CREATE TABLE IF NOT EXISTS alerts 
                      (email TEXT, alert_type TEXT, timestamp TEXT)''')
         conn.commit()
         conn.close()
-    except Exception as e:
+    except Exception:
         pass
 
 def save_lead(email, ticker):
@@ -59,8 +56,7 @@ def save_lead(email, ticker):
         pass
 
 def get_usage(email):
-    """Calculates usage precisely over the last 48 hours with failsafes."""
-    init_db() # Force schema check
+    init_db() 
     try:
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
@@ -84,11 +80,9 @@ def get_usage(email):
                 
         return p_runs, p_reps, s_reps
     except Exception:
-        # Failsafe: If DB locks or table is missing on cloud reboot, default to 0 usage to prevent crash
         return 0, 0, 0
 
 def log_usage(email, is_premium, report_count):
-    """Logs successful generation runs."""
     init_db()
     try:
         conn = sqlite3.connect('users.db')
@@ -101,7 +95,6 @@ def log_usage(email, is_premium, report_count):
         pass
 
 def send_limit_email(email, limit_msg):
-    """Sends an alert if blocked, throttled to 1 email per 24h to avoid spam."""
     init_db()
     try:
         conn = sqlite3.connect('users.db')
@@ -132,8 +125,6 @@ def send_limit_email(email, limit_msg):
     except Exception:
         pass
 
-init_db()
-
 # --- 2. SET UP THE WEB PAGE ---
 st.set_page_config(page_title="AI Hedge Fund", page_icon="📈", layout="wide")
 
@@ -149,33 +140,44 @@ def get_executor():
 global_tasks = get_task_registry()
 background_executor = get_executor()
 
-# --- INITIALIZE MEMORY ---
-if "final_reports" not in st.session_state:
-    st.session_state.final_reports = {}
-if "analysis_complete" not in st.session_state:
-    st.session_state.analysis_complete = False
-if "auto_ceo" not in st.session_state:
-    st.session_state.auto_ceo = ""
+# --- INITIALIZE MEMORY FOR WIDGET KEYS ---
+if "company_input" not in st.session_state:
+    st.session_state.company_input = ""
+if "ticker_input" not in st.session_state:
+    st.session_state.ticker_input = ""
+if "ceo_input" not in st.session_state:
+    st.session_state.ceo_input = ""
 
-# Auto-Fetch CEO Logic
-def fetch_ceo_from_ticker():
+# --- THE NEW BULLETPROOF AUTO-FILL LOGIC ---
+def fetch_data_from_ticker():
+    """Forces Streamlit to update the Company and CEO fields by directly modifying their keys."""
     ticker = st.session_state.ticker_input.strip()
     if ticker:
         try:
             stock = yf.Ticker(ticker)
-            officers = stock.info.get('companyOfficers', [])
+            info = stock.info
+            
+            # 1. Inject Company Name
+            long_name = info.get('longName', '')
+            if long_name:
+                st.session_state.company_input = long_name
+                
+            # 2. Inject CEO Name
+            officers = info.get('companyOfficers', [])
+            found_ceo = False
             for officer in officers:
                 title = officer.get('title', '').upper()
                 if 'CEO' in title or 'CHIEF EXECUTIVE' in title:
-                    st.session_state.auto_ceo = officer.get('name')
-                    return
+                    st.session_state.ceo_input = officer.get('name')
+                    found_ceo = True
+                    break
+            if not found_ceo:
+                st.session_state.ceo_input = ""
         except Exception:
             pass
-    st.session_state.auto_ceo = ""
 
 # --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
-    # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
@@ -202,7 +204,6 @@ OUTPUT STRUCTURE:
 5. VALUATION PROXY: Based on the data provided, is the stock trading at a premium, discount, or fair value? Does the growth justify the multiple?
 6. FINAL VERDICT: A concluding paragraph summarizing the risk/reward asymmetry.""",
 
-    # --- INDUSTRY AGENTS ---
     "Industry - Macro Environment & Strategic Outlook": """ROLE: Senior Macro Strategist at a Global Macro Hedge Fund.
 TASK: Produce a data-driven sector intelligence report for [INSERT INDUSTRY]. Focus on regime changes, capital flows, and structural shifts, not just generic trends.
 OUTPUT STRUCTURE:
@@ -271,7 +272,6 @@ OUTPUT STRUCTURE:
 4. SUBSTITUTION RISK: What happens if a parallel technology or industry suddenly shifts? (e.g., How streaming destroyed physical media).
 5. MILESTONE TIMELINE: List 3 historical events that permanently altered this industry, and project 1 future event that could disrupt it again.""",
 
-    # --- CONCEPT AGENTS ---
     "Concept - Investment Education & Metric Breakdown": """ROLE: Director of Research training incoming Hedge Fund Analysts.
 TASK: Deconstruct the concept of {CONCEPT NAME} for a smart investor.
 OUTPUT STRUCTURE:
@@ -282,7 +282,6 @@ OUTPUT STRUCTURE:
 5. REAL-WORLD APPLICATION: A concrete example of this concept in action (e.g., how it looks on a 10-K or earnings call).
 6. 3 METRICS TO CROSS-REFERENCE: What other data points must you check to ensure this concept isn't painting a false picture?""",
 
-    # --- CEO AGENTS ---
     "CEO - Track Record & Capital Allocation": """ROLE: Institutional Activist Investor.
 TASK: Produce a ruthless, evidence-based dossier on {{CEO Name}} at {{Company Name}}.
 OUTPUT STRUCTURE:
@@ -293,7 +292,6 @@ OUTPUT STRUCTURE:
 5. INTEGRITY: How do they handle bad news on earnings calls? Do they take responsibility or blame external factors?
 VERDICT: Is this CEO a compounder of capital or a risk to the thesis?""",
 
-    # --- STOCK BASE AGENTS ---
     "Company - Management Quality & Insider Incentives": """ROLE: Activist Investor / Corporate Governance Analyst.
 TASK: Perform a ruthless evaluation of [Company_name]'s management alignment with minority shareholders.
 OUTPUT STRUCTURE: Render a verdict (ALIGNED / MIXED / MISALIGNED) based on:
@@ -382,7 +380,6 @@ ceo_agents = ["CEO - Track Record & Capital Allocation"]
 
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
-
 st.title("📈 AI Hedge Fund Analyst")
 st.markdown("Generate institutional-grade financial, strategic, and macro research.")
 
@@ -407,7 +404,6 @@ st.markdown("### Step 1: Target Information")
 user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
 user_email_clean = user_email.strip().lower()
 
-# LIVE QUOTA DASHBOARD
 is_super_user = user_email_clean in SUPER_USERS
 if user_email_clean and "@" in user_email_clean:
     if is_super_user:
@@ -426,12 +422,13 @@ if user_email_clean and "@" in user_email_clean:
 
 col1, col2 = st.columns(2)
 with col1:
-    target_company = st.text_input("Company Name (e.g., Tesla):")
-    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_ceo_from_ticker)
+    # Notice we bind these directly to the session_state keys!
+    target_company = st.text_input("Company Name (e.g., Tesla):", key="company_input")
+    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_data_from_ticker)
     target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
 with col2:
     target_industry = st.text_input("Industry (e.g., Electric Vehicles):")
-    target_ceo = st.text_input("CEO's Name (Optional):", value=st.session_state.auto_ceo)
+    target_ceo = st.text_input("CEO's Name (Optional):", key="ceo_input")
 
 st.markdown("---")
 st.markdown("### Step 2: Engine Configuration")
@@ -459,7 +456,6 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     client = genai.Client(api_key=api_key)
     reports = {}
     
-    # --- AUTO-RESOLVER ---
     resolved_ticker = ticker.strip().upper()
     resolved_company = company.strip()
     resolved_ceo = ceo.strip()
@@ -656,7 +652,6 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.error("The AI Education report requires a Financial Concept.")
         st.stop()
 
-    # --- ENFORCE QUOTAS BEFORE RUNNING ---
     is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
     num_requested = len(selected_prompts)
     
@@ -683,7 +678,6 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
                 send_limit_email(user_email_clean, msg)
                 st.stop()
                 
-    # IF PASSED, DEDUCT QUOTA
     log_usage(user_email_clean, is_premium_request, num_requested)
 
     safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
