@@ -148,24 +148,23 @@ if "ticker_input" not in st.session_state:
 if "ceo_input" not in st.session_state:
     st.session_state.ceo_input = ""
 
-# --- THE NEW BULLETPROOF AUTO-FILL LOGIC ---
+# --- THE DUAL-FETCH AUTO-FILL LOGIC ---
 def fetch_data_from_ticker():
-    """Forces Streamlit to update the Company and CEO fields by directly modifying their keys."""
-    ticker = st.session_state.ticker_input.strip()
-    if ticker:
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            
-            # 1. Inject Company Name
-            long_name = info.get('longName', '')
-            if long_name:
-                st.session_state.company_input = long_name
-                
-            # 2. Inject CEO Name
-            officers = info.get('companyOfficers', [])
+    """Forces Streamlit to update the Company and CEO fields using Yahoo Finance or Gemini as fallback."""
+    ticker = st.session_state.ticker_input.strip().upper()
+    if not ticker:
+        return
+        
+    st.toast(f"Searching for {ticker} data...", icon="🔍")
+    
+    # ATTEMPT 1: Yahoo Finance (Fastest, but gets blocked on Cloud)
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        if info and 'longName' in info:
+            st.session_state.company_input = info.get('longName', '')
             found_ceo = False
-            for officer in officers:
+            for officer in info.get('companyOfficers', []):
                 title = officer.get('title', '').upper()
                 if 'CEO' in title or 'CHIEF EXECUTIVE' in title:
                     st.session_state.ceo_input = officer.get('name')
@@ -173,8 +172,29 @@ def fetch_data_from_ticker():
                     break
             if not found_ceo:
                 st.session_state.ceo_input = ""
-        except Exception:
-            pass
+            st.toast("Found via Market Data!", icon="✅")
+            return
+    except Exception:
+        pass # Move to fallback
+
+    # ATTEMPT 2: Gemini AI Fallback (Bypasses Cloud Blocks)
+    try:
+        client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+        prompt = f"Provide the official Company Name and the current CEO's Name for the stock ticker '{ticker}'. Format EXACTLY as: CompanyName|CEOName. If unknown, reply UNKNOWN."
+        res = client.models.generate_content(model='gemini-3.1-flash-lite-preview', contents=prompt)
+        ans = res.text.strip()
+        
+        if "|" in ans and "UNKNOWN" not in ans:
+            parts = ans.split("|")
+            st.session_state.company_input = parts[0].strip()
+            st.session_state.ceo_input = parts[1].strip()
+            st.toast("Found via AI Search!", icon="✅")
+            return
+    except Exception:
+        pass
+
+    st.toast("Could not auto-fill. Please type manually.", icon="⚠️")
+
 
 # --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
@@ -422,7 +442,6 @@ if user_email_clean and "@" in user_email_clean:
 
 col1, col2 = st.columns(2)
 with col1:
-    # Notice we bind these directly to the session_state keys!
     target_company = st.text_input("Company Name (e.g., Tesla):", key="company_input")
     target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_data_from_ticker)
     target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
