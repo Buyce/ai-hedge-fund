@@ -105,10 +105,10 @@ def send_limit_email(email, limit_msg):
         if c.fetchone()[0] == 0:
             try:
                 msg = MIMEMultipart()
-                msg['From'] = f"AI Hedge Fund <{st.secrets['EMAIL_SENDER']}>"
+                msg['From'] = f"B.E Research <{st.secrets['EMAIL_SENDER']}>"
                 msg['To'] = email
-                msg['Subject'] = "Action Required: AI Hedge Fund Usage Limit Reached"
-                body = f"Hello,\n\nYou have reached a usage limit on the AI Hedge Fund platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nAI Hedge Fund Analyst Team"
+                msg['Subject'] = "Action Required: B.E Research Usage Limit Reached"
+                body = f"Hello,\n\nYou have reached a usage limit on the platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nB.E Research Team"
                 msg.attach(MIMEText(body, 'plain'))
                 
                 server = smtplib.SMTP("smtp.gmail.com", 587)
@@ -126,7 +126,7 @@ def send_limit_email(email, limit_msg):
         pass
 
 # --- 2. SET UP THE WEB PAGE ---
-st.set_page_config(page_title="AI Hedge Fund", page_icon="📈", layout="wide")
+st.set_page_config(page_title="B.E Research Investing Assistant", page_icon="📈", layout="wide")
 
 # --- 3. PERSISTENT BACKGROUND ENGINE ---
 @st.cache_resource
@@ -140,64 +140,44 @@ def get_executor():
 global_tasks = get_task_registry()
 background_executor = get_executor()
 
-# --- INITIALIZE MEMORY FOR WIDGET KEYS ---
-if "company_input" not in st.session_state:
-    st.session_state.company_input = ""
-if "ticker_input" not in st.session_state:
-    st.session_state.ticker_input = ""
-if "ceo_input" not in st.session_state:
-    st.session_state.ceo_input = ""
+# --- INITIALIZE MEMORY FOR UI AUTO-FETCH ---
+if "final_reports" not in st.session_state:
+    st.session_state.final_reports = {}
+if "analysis_complete" not in st.session_state:
+    st.session_state.analysis_complete = False
+if "auto_ceo" not in st.session_state:
+    st.session_state.auto_ceo = ""
+if "auto_company" not in st.session_state:
+    st.session_state.auto_company = ""
 
-# --- THE DUAL-FETCH AUTO-FILL LOGIC ---
-def fetch_data_from_ticker():
-    """Forces Streamlit to update the Company and CEO fields using Yahoo Finance or Gemini as fallback."""
-    ticker = st.session_state.ticker_input.strip().upper()
-    if not ticker:
-        return
-        
-    st.toast(f"Searching for {ticker} data...", icon="🔍")
-    
-    # ATTEMPT 1: Yahoo Finance (Fastest, but gets blocked on Cloud)
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        if info and 'longName' in info:
-            st.session_state.company_input = info.get('longName', '')
+# --- THE CLEAN UI AUTO-FETCH LOGIC ---
+def fetch_info_from_ticker():
+    ticker = st.session_state.ticker_input.strip()
+    if ticker:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            if 'longName' in info:
+                st.session_state.auto_company = info.get('longName', '')
+            
+            officers = info.get('companyOfficers', [])
             found_ceo = False
-            for officer in info.get('companyOfficers', []):
+            for officer in officers:
                 title = officer.get('title', '').upper()
                 if 'CEO' in title or 'CHIEF EXECUTIVE' in title:
-                    st.session_state.ceo_input = officer.get('name')
+                    st.session_state.auto_ceo = officer.get('name')
                     found_ceo = True
                     break
             if not found_ceo:
-                st.session_state.ceo_input = ""
-            st.toast("Found via Market Data!", icon="✅")
-            return
-    except Exception:
-        pass # Move to fallback
-
-    # ATTEMPT 2: Gemini AI Fallback (Bypasses Cloud Blocks)
-    try:
-        client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
-        prompt = f"Provide the official Company Name and the current CEO's Name for the stock ticker '{ticker}'. Format EXACTLY as: CompanyName|CEOName. If unknown, reply UNKNOWN."
-        res = client.models.generate_content(model='gemini-3.1-flash-lite-preview', contents=prompt)
-        ans = res.text.strip()
-        
-        if "|" in ans and "UNKNOWN" not in ans:
-            parts = ans.split("|")
-            st.session_state.company_input = parts[0].strip()
-            st.session_state.ceo_input = parts[1].strip()
-            st.toast("Found via AI Search!", icon="✅")
-            return
-    except Exception:
-        pass
-
-    st.toast("Could not auto-fill. Please type manually.", icon="⚠️")
-
+                st.session_state.auto_ceo = ""
+                
+        except Exception:
+            pass
 
 # --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
+    # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
@@ -224,6 +204,7 @@ OUTPUT STRUCTURE:
 5. VALUATION PROXY: Based on the data provided, is the stock trading at a premium, discount, or fair value? Does the growth justify the multiple?
 6. FINAL VERDICT: A concluding paragraph summarizing the risk/reward asymmetry.""",
 
+    # --- INDUSTRY AGENTS ---
     "Industry - Macro Environment & Strategic Outlook": """ROLE: Senior Macro Strategist at a Global Macro Hedge Fund.
 TASK: Produce a data-driven sector intelligence report for [INSERT INDUSTRY]. Focus on regime changes, capital flows, and structural shifts, not just generic trends.
 OUTPUT STRUCTURE:
@@ -292,6 +273,7 @@ OUTPUT STRUCTURE:
 4. SUBSTITUTION RISK: What happens if a parallel technology or industry suddenly shifts? (e.g., How streaming destroyed physical media).
 5. MILESTONE TIMELINE: List 3 historical events that permanently altered this industry, and project 1 future event that could disrupt it again.""",
 
+    # --- CONCEPT AGENTS ---
     "Concept - Investment Education & Metric Breakdown": """ROLE: Director of Research training incoming Hedge Fund Analysts.
 TASK: Deconstruct the concept of {CONCEPT NAME} for a smart investor.
 OUTPUT STRUCTURE:
@@ -302,6 +284,7 @@ OUTPUT STRUCTURE:
 5. REAL-WORLD APPLICATION: A concrete example of this concept in action (e.g., how it looks on a 10-K or earnings call).
 6. 3 METRICS TO CROSS-REFERENCE: What other data points must you check to ensure this concept isn't painting a false picture?""",
 
+    # --- CEO AGENTS ---
     "CEO - Track Record & Capital Allocation": """ROLE: Institutional Activist Investor.
 TASK: Produce a ruthless, evidence-based dossier on {{CEO Name}} at {{Company Name}}.
 OUTPUT STRUCTURE:
@@ -312,6 +295,7 @@ OUTPUT STRUCTURE:
 5. INTEGRITY: How do they handle bad news on earnings calls? Do they take responsibility or blame external factors?
 VERDICT: Is this CEO a compounder of capital or a risk to the thesis?""",
 
+    # --- STOCK BASE AGENTS ---
     "Company - Management Quality & Insider Incentives": """ROLE: Activist Investor / Corporate Governance Analyst.
 TASK: Perform a ruthless evaluation of [Company_name]'s management alignment with minority shareholders.
 OUTPUT STRUCTURE: Render a verdict (ALIGNED / MIXED / MISALIGNED) based on:
@@ -400,8 +384,10 @@ ceo_agents = ["CEO - Track Record & Capital Allocation"]
 
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
-st.title("📈 AI Hedge Fund Analyst")
-st.markdown("Generate institutional-grade financial, strategic, and macro research.")
+# --- MAIN UI SETUP ---
+st.title("📈 B.E Research Investing Assistant")
+st.markdown("Wall Street-level stock and industry research, explained simply for everyday investors.")
+st.caption("⚠️ **Disclaimer:** The reports generated by this AI are for educational and informational purposes only and do not constitute financial, investment, or legal advice. Always conduct your own research or consult with a certified financial advisor before making any investment decisions.")
 
 # --- 5. ADMIN SIDEBAR ---
 with st.sidebar:
@@ -414,12 +400,12 @@ with st.sidebar:
             conn = sqlite3.connect('users.db')
             df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
             st.dataframe(df, use_container_width=True)
-            st.download_button("📥 Export CSV", df.to_csv(index=False), "hedge_fund_leads.csv", "text/csv")
+            st.download_button("📥 Export CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
             conn.close()
         except Exception:
             st.error("Database initializing...")
 
-# --- 6. MAIN UI (MOBILE OPTIMIZED) ---
+# --- 6. MAIN UI FLOW ---
 st.markdown("### Step 1: Target Information")
 user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
 user_email_clean = user_email.strip().lower()
@@ -442,12 +428,12 @@ if user_email_clean and "@" in user_email_clean:
 
 col1, col2 = st.columns(2)
 with col1:
-    target_company = st.text_input("Company Name (e.g., Tesla):", key="company_input")
-    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_data_from_ticker)
+    target_company = st.text_input("Company Name (e.g., Tesla):", value=st.session_state.auto_company)
+    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_info_from_ticker)
     target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
 with col2:
     target_industry = st.text_input("Industry (e.g., Electric Vehicles):")
-    target_ceo = st.text_input("CEO's Name (Optional):", key="ceo_input")
+    target_ceo = st.text_input("CEO's Name (Optional):", value=st.session_state.auto_ceo)
 
 st.markdown("---")
 st.markdown("### Step 2: Engine Configuration")
@@ -621,7 +607,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
 
     try:
         msg = MIMEMultipart()
-        msg['From'] = f"AI Hedge Fund <{email_sender}>"
+        msg['From'] = f"B.E Research <{email_sender}>"
         msg['To'] = email
         msg['Subject'] = f"🚀 Analysis Complete: {resolved_company}"
         body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
@@ -630,7 +616,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         part = MIMEBase('application', 'octet-stream')
         part.set_payload(zip_buffer.getvalue())
         encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f"attachment; filename={resolved_ticker}_Reports.zip")
+        part.add_header('Content-Disposition', f"attachment; filename={resolved_ticker}_BEResearch_Reports.zip")
         msg.attach(part)
         
         server = smtplib.SMTP("smtp.gmail.com", 587)
@@ -644,7 +630,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     global_tasks[email]["status"] = "complete"
 
 # --- 8. RUN BUTTON & BILLING GATEKEEPER ---
-if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True):
+if st.button("🚀 Generate B.E Research Report", use_container_width=True):
     if not user_email or "@" not in user_email:
         st.error("Please enter a valid email address.")
         st.stop()
@@ -668,7 +654,7 @@ if st.button("🚀 Generate Master Hedge Fund Report", use_container_width=True)
         st.error("The CEO report needs to know the company. Please provide a Company Name or Ticker Symbol.")
         st.stop()
     if needs_concept and not target_concept.strip():
-        st.error("The AI Education report requires a Financial Concept.")
+        st.error("The Concept Education report requires a Financial Concept.")
         st.stop()
 
     is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
@@ -740,7 +726,7 @@ if user_email_clean in global_tasks:
         st.download_button(
             label="📥 Download Reports as .ZIP",
             data=zip_buffer.getvalue(),
-            file_name=f"{task['ticker']}_AI_HedgeFund_Reports.zip",
+            file_name=f"{task['ticker']}_BEResearch_Reports.zip",
             mime="application/zip",
             use_container_width=True
         )
