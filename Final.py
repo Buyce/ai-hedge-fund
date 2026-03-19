@@ -26,14 +26,22 @@ def init_db():
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS leads 
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, target_ticker TEXT, timestamp TEXT)''')
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                      email TEXT, 
+                      target_ticker TEXT,
+                      timestamp TEXT)''')
         c.execute('''CREATE TABLE IF NOT EXISTS usage_logs 
-                     (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, run_timestamp TEXT, is_premium BOOLEAN, report_count INTEGER)''')
+                     (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                      email TEXT, 
+                      run_timestamp TEXT,
+                      is_premium BOOLEAN,
+                      report_count INTEGER)''')
         c.execute('''CREATE TABLE IF NOT EXISTS alerts 
                      (email TEXT, alert_type TEXT, timestamp TEXT)''')
         conn.commit()
         conn.close()
-    except Exception: pass
+    except Exception:
+        pass
 
 def save_lead(email, ticker):
     init_db()
@@ -44,7 +52,8 @@ def save_lead(email, ticker):
                   (email, ticker, datetime.now().isoformat()))
         conn.commit()
         conn.close()
-    except Exception: pass
+    except Exception:
+        pass
 
 def get_usage(email):
     init_db() 
@@ -52,15 +61,26 @@ def get_usage(email):
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
         forty_eight_hours_ago = (datetime.now() - timedelta(hours=48)).isoformat()
-        c.execute("SELECT is_premium, report_count FROM usage_logs WHERE email=? AND run_timestamp >= ?", (email, forty_eight_hours_ago))
+        
+        c.execute("SELECT is_premium, report_count FROM usage_logs WHERE email=? AND run_timestamp >= ?", 
+                  (email, forty_eight_hours_ago))
         rows = c.fetchall()
         conn.close()
-        p_runs, p_reps, s_reps = 0, 0, 0
+        
+        p_runs = 0
+        p_reps = 0
+        s_reps = 0
+        
         for is_premium, count in rows:
-            if is_premium: p_runs += 1; p_reps += count
-            else: s_reps += count
+            if is_premium:
+                p_runs += 1
+                p_reps += count
+            else:
+                s_reps += count
+                
         return p_runs, p_reps, s_reps
-    except Exception: return 0, 0, 0
+    except Exception:
+        return 0, 0, 0
 
 def log_usage(email, is_premium, report_count):
     init_db()
@@ -71,7 +91,8 @@ def log_usage(email, is_premium, report_count):
                   (email, datetime.now().isoformat(), is_premium, report_count))
         conn.commit()
         conn.close()
-    except Exception: pass
+    except Exception:
+        pass
 
 def send_limit_email(email, limit_msg):
     init_db()
@@ -79,46 +100,82 @@ def send_limit_email(email, limit_msg):
         conn = sqlite3.connect('users.db')
         c = conn.cursor()
         twenty_four_hours_ago = (datetime.now() - timedelta(hours=24)).isoformat()
+        
         c.execute("SELECT COUNT(*) FROM alerts WHERE email=? AND alert_type='limit' AND timestamp >= ?", (email, twenty_four_hours_ago))
         if c.fetchone()[0] == 0:
             try:
                 msg = MIMEMultipart()
                 msg['From'] = f"B.E Research <{st.secrets['EMAIL_SENDER']}>"
                 msg['To'] = email
-                msg['Subject'] = "Usage Limit Reached"
-                msg.attach(MIMEText(f"Hello,\n\nYou reached a limit: {limit_msg}\n\nBest,\nB.E Research Team", 'plain'))
-                server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls()
-                server.login(st.secrets['EMAIL_SENDER'], st.secrets['EMAIL_PASSWORD']); server.send_message(msg); server.quit()
-                c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, 'limit', datetime.now().isoformat())); conn.commit()
-            except Exception: pass
+                msg['Subject'] = "Action Required: B.E Research Usage Limit Reached"
+                body = f"Hello,\n\nYou have reached a usage limit on the platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nB.E Research Team"
+                msg.attach(MIMEText(body, 'plain'))
+                
+                server = smtplib.SMTP("smtp.gmail.com", 587)
+                server.starttls()
+                server.login(st.secrets['EMAIL_SENDER'], st.secrets['EMAIL_PASSWORD'])
+                server.send_message(msg)
+                server.quit()
+                
+                c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, 'limit', datetime.now().isoformat()))
+                conn.commit()
+            except Exception:
+                pass
         conn.close()
-    except Exception: pass
+    except Exception:
+        pass
 
-# --- 2. APP SETUP ---
+# --- 2. SET UP THE WEB PAGE ---
 st.set_page_config(page_title="B.E Research Investing Assistant", page_icon="📈", layout="wide")
 
+# --- 3. PERSISTENT BACKGROUND ENGINE ---
 @st.cache_resource
-def get_task_registry(): return {} 
+def get_task_registry():
+    return {} 
+
 @st.cache_resource
-def get_executor(): return concurrent.futures.ThreadPoolExecutor(max_workers=2)
+def get_executor():
+    return concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 global_tasks = get_task_registry()
 background_executor = get_executor()
 
-if "auto_ceo" not in st.session_state: st.session_state.auto_ceo = ""
-if "auto_company" not in st.session_state: st.session_state.auto_company = ""
+# --- INITIALIZE MEMORY FOR UI AUTO-FETCH ---
+if "final_reports" not in st.session_state:
+    st.session_state.final_reports = {}
+if "analysis_complete" not in st.session_state:
+    st.session_state.analysis_complete = False
+if "auto_ceo" not in st.session_state:
+    st.session_state.auto_ceo = ""
+if "auto_company" not in st.session_state:
+    st.session_state.auto_company = ""
 
+# --- THE CLEAN UI AUTO-FETCH LOGIC ---
 def fetch_info_from_ticker():
     ticker = st.session_state.ticker_input.strip()
     if ticker:
         try:
-            stock = yf.Ticker(ticker); info = stock.info
-            if 'longName' in info: st.session_state.auto_company = info.get('longName', '')
-            for officer in info.get('companyOfficers', []):
-                if 'CEO' in officer.get('title', '').upper(): st.session_state.auto_ceo = officer.get('name'); break
-        except Exception: pass
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            
+            if 'longName' in info:
+                st.session_state.auto_company = info.get('longName', '')
+            
+            officers = info.get('companyOfficers', [])
+            found_ceo = False
+            for officer in officers:
+                title = officer.get('title', '').upper()
+                if 'CEO' in title or 'CHIEF EXECUTIVE' in title:
+                    st.session_state.auto_ceo = officer.get('name')
+                    found_ceo = True
+                    break
+            if not found_ceo:
+                st.session_state.auto_ceo = ""
+                
+        except Exception:
+            pass
 
-# --- 3. PROMPTS ---
+# --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
@@ -309,149 +366,367 @@ OUTPUT STRUCTURE:
 VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candidate). Detail the precise mechanism that would trigger a collapse."""
 }
 
-dependent_agents = ["Company - Financial Trajectory & Macro Sensitivity", "Company - Final Investment Memo & Rating"]
-industry_agents = [k for k in gem_prompts.keys() if "Industry" in k]
+dependent_agents = [
+    "Company - Financial Trajectory & Macro Sensitivity", 
+    "Company - Final Investment Memo & Rating"
+]
+industry_agents = [
+    "Industry - Macro Environment & Strategic Outlook", 
+    "Industry - Future Growth & Disruption Scenarios", 
+    "Industry - Core Economics & Market Structure", 
+    "Industry - Business Models & Ecosystem Architecture", 
+    "Industry - Value Chain Mapping & Key Players", 
+    "Industry - Unit Economics & Operating Leverage", 
+    "Industry - Geopolitics, Regulation & TAM"
+]
 concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
-stock_base_agents = [k for k in gem_prompts.keys() if k not in (dependent_agents + industry_agents + concept_agents + ceo_agents)]
 
-# --- 4. UI ---
+stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
+
+# --- MAIN UI SETUP ---
 st.title("📈 B.E Research Investing Assistant")
-st.markdown("**Wall Street-level research, simplified for every investor.**")
-st.warning("⚖️ **Disclaimer:** Not financial advice. For educational purposes only.")
+st.markdown("Wall Street-level stock and industry research, explained simply for everyday investors.")
+st.caption("⚠️ **Disclaimer:** The reports generated are for educational and informational purposes only and do not constitute financial, investment, or legal advice. Always conduct your own research or consult with a certified financial advisor before making any investment decisions.")
 
+# --- 5. ADMIN SIDEBAR ---
 with st.sidebar:
     st.header("🔐 Admin Dashboard")
-    auth = st.text_input("Password", type="password")
-    if auth == st.secrets.get("ADMIN_PASSWORD", ""):
+    st.info("Regular users do not need to access this menu.")
+    auth_pass = st.text_input("Admin Password", type="password")
+    if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
+        st.success("Authenticated")
         try:
-            conn = sqlite3.connect('users.db'); df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-            st.dataframe(df); conn.close()
-        except Exception: pass
+            conn = sqlite3.connect('users.db')
+            df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+            st.dataframe(df, use_container_width=True)
+            st.download_button("📥 Export CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
+            conn.close()
+        except Exception:
+            st.error("Database initializing...")
 
+# --- 6. MAIN UI FLOW ---
 st.markdown("### Step 1: Target Information")
-user_email = st.text_input("📧 Email for delivery:", placeholder="yourname@example.com")
+user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
 user_email_clean = user_email.strip().lower()
 
-if user_email_clean and "@" in user_email_clean and user_email_clean not in SUPER_USERS:
-    p_runs, _, s_reps = get_usage(user_email_clean)
-    st.info(f"⏳ **48hr Remaining:** {max(0, 4-p_runs)} Premium Runs | {max(0, 30-s_reps)} Standard Reports")
+is_super_user = user_email_clean in SUPER_USERS
+if user_email_clean and "@" in user_email_clean:
+    if is_super_user:
+        st.success("🌟 Super User Access: Unlimited Reports Available")
+    else:
+        p_runs, p_reps, s_reps = get_usage(user_email_clean)
+        rem_p_runs = max(0, 4 - p_runs)
+        rem_p_reps = max(0, 6 - p_reps)
+        rem_s_reps = max(0, 30 - s_reps)
+        
+        st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
+        q1, q2, q3 = st.columns(3)
+        q1.metric("Premium Runs", f"{rem_p_runs} / 4")
+        q2.metric("Premium Reports", f"{rem_p_reps} / 6")
+        q3.metric("Standard Reports", f"{rem_s_reps} / 30")
 
 col1, col2 = st.columns(2)
 with col1:
-    t_company = st.text_input("Company Name (e.g. Tesla):", value=st.session_state.auto_company)
-    t_ticker = st.text_input("Ticker Symbol (e.g. TSLA):", key="ticker_input", on_change=fetch_info_from_ticker)
-    t_concept = st.text_input("Financial Concept to Explain (e.g. ROIC):")
+    target_company = st.text_input("Company Name (e.g., Tesla):", value=st.session_state.auto_company)
+    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_info_from_ticker)
+    target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):")
 with col2:
-    t_industry = st.text_input("Industry Sector (e.g. Electric Vehicles):")
-    t_ceo = st.text_input("CEO's Name:", value=st.session_state.auto_ceo)
+    target_industry = st.text_input("Industry (e.g., Electric Vehicles):")
+    target_ceo = st.text_input("CEO's Name (Optional):", value=st.session_state.auto_ceo)
 
 st.markdown("---")
 st.markdown("### Step 2: Engine Configuration")
-cfg1, cfg2 = st.columns(2)
-with cfg1:
-    brain_id = st.radio("🧠 Engine Power:", ["gemini-3.1-flash-lite-preview", "gemini-3.1-pro-preview"], format_func=lambda x: "Fast (Standard)" if "flash" in x else "High (Advanced)", index=0)
-with cfg2:
-    tool_id = st.radio("🔎 Method:", ["Standard Search", "Deep Research", "Market Data"], index=0)
+
+cfg_col1, cfg_col2 = st.columns(2)
+with cfg_col1:
+    brain_options = {
+        "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview",
+        "Gemini 3.1 Flash Lite (Fast/Cheap)": "gemini-3.1-flash-lite-preview"
+    }
+    selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()))
+    selected_brain = brain_options[selected_brain_label]
+
+with cfg_col2:
+    tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Deep Research", "Yahoo Finance Data"])
 
 st.markdown("---")
 st.markdown("### Step 3: Select Reports")
-st.info("💡 You can select multiple reports at once for a comprehensive analysis.")
-selected = st.multiselect("📑 Reports to generate:", list(gem_prompts.keys()), default=[])
+selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=list(gem_prompts.keys()))
+st.markdown("---")
 
-# --- 5. BACKGROUND ENGINE ---
-def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium):
-    client = genai.Client(api_key=api_key); reports = {}
+# --- 7. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
+def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run):
+    global_tasks[email]["progress"] = "Initializing & Auto-Resolving Missing Data..."
+    client = genai.Client(api_key=api_key)
+    reports = {}
     
-    # Resolver
     resolved_ticker = ticker.strip().upper()
     resolved_company = company.strip()
+    resolved_ceo = ceo.strip()
+
     if resolved_company and not resolved_ticker:
         try:
-            res = client.models.generate_content(model='gemini-3.1-flash-lite-preview', contents=f"Ticker for {resolved_company}? Symbol only.")
-            resolved_ticker = res.text.strip().upper()
-        except: pass
+            prompt = f"What is the official stock ticker symbol for '{resolved_company}'? Return ONLY the symbol (e.g., TSLA). If it is a private company, reply PRIVATE."
+            res = client.models.generate_content(model='gemini-3.1-flash-lite-preview', contents=prompt)
+            ans = res.text.strip().replace("$", "").upper()
+            if "PRIVATE" not in ans and len(ans) <= 10:
+                resolved_ticker = ans
+        except:
+            pass
 
-    def fire(n, raw_instr, ctx=""):
-        instr = raw_instr.replace("[STOCK NAME]", resolved_company).replace("[TICKER]", resolved_ticker).replace("[INSERT INDUSTRY]", industry).replace("[Industry Name]", industry).replace("{{CEO Name}}", ceo).replace("{{Company Name}}", resolved_company).replace("{CONCEPT NAME}", concept).replace("[Company_name]", resolved_company).replace("{Company_Name}", resolved_company).replace("[Company Name]", resolved_company).replace("[Insert stock]", resolved_ticker)
-        instr += "\n\nCRITICAL: Be exhaustive (1500+ words). List 'SOURCES & REFERENCES' at the bottom. This is a B.E Research product."
+    if resolved_ticker:
         try:
-            if ctx and n in dependent_agents:
-                res = client.models.generate_content(model='gemini-3.1-pro-preview', contents=f"SYNTHESIS:\n{instr}\n\nDATA:\n{ctx}")
-                return n, res.text
+            stock = yf.Ticker(resolved_ticker)
+            info = stock.info
+            if not resolved_company:
+                resolved_company = info.get('longName', resolved_ticker)
+            if not resolved_ceo:
+                officers = info.get('companyOfficers', [])
+                for officer in officers:
+                    title = officer.get('title', '').upper()
+                    if 'CEO' in title or 'CHIEF EXECUTIVE' in title:
+                        resolved_ceo = officer.get('name')
+                        break
+        except:
+            pass
+
+    if not resolved_company: resolved_company = resolved_ticker if resolved_ticker else "the company"
+    if not resolved_ticker: resolved_ticker = resolved_company
+    if not resolved_ceo: resolved_ceo = "the CEO"
+
+    yf_context = ""
+    if tool_id == "Yahoo Finance":
+        global_tasks[email]["progress"] = f"Fetching Yahoo Finance data for {resolved_ticker}..."
+        try:
+            stock = yf.Ticker(resolved_ticker)
+            info = stock.info
+            yf_context = f"BUSINESS SUMMARY:\n{info.get('longBusinessSummary', 'N/A')}\n\n"
+            yf_context += f"FINANCIALS:\n{stock.financials.head(15).to_string()}\n"
+        except Exception as e:
+            yf_context = f"Could not fetch YFinance data: {e}"
+
+    def fire_agent(agent_name, raw_instruction, extra_context=""):
+        if agent_name in industry_agents and not industry.strip(): return agent_name, "Skipped: No Industry provided."
+        if agent_name in concept_agents and not concept.strip(): return agent_name, "Skipped: No Concept provided."
+        if agent_name in ceo_agents and not resolved_ceo.strip(): return agent_name, "Skipped: No CEO found or provided."
+
+        instruction = raw_instruction.replace("[STOCK NAME]", resolved_company) \
+                                     .replace("[TICKER]", resolved_ticker) \
+                                     .replace("[Company_name]", resolved_company) \
+                                     .replace("[company_name]", resolved_company) \
+                                     .replace("[Company Name]", resolved_company) \
+                                     .replace("{Company_Name}", resolved_company) \
+                                     .replace("{{Company Name}}", resolved_company) \
+                                     .replace("[COMPANY]", resolved_company) \
+                                     .replace("{{CEO Name}}", resolved_ceo) \
+                                     .replace("[INSERT INDUSTRY]", industry) \
+                                     .replace("[INSERT INDUSTRY NAME]", industry) \
+                                     .replace("[Industry Name]", industry) \
+                                     .replace("[Insert Industry Name]", industry) \
+                                     .replace("[Insert stock]", resolved_ticker) \
+                                     .replace("{CONCEPT NAME}", concept)
+        
+        instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into the raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report. MANDATORY: At the very bottom of your report, include a 'SOURCES & REFERENCES' section listing every document, financial filing, or dataset you used to generate these findings."
+
+        try:
+            if extra_context and agent_name in dependent_agents:
+                prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
+                res = client.models.generate_content(model='gemini-3.1-pro-preview', contents=prompt, config=types.GenerateContentConfig(temperature=0.1))
+                return agent_name, res.text
+            
             if tool_id == "Deep Research":
-                it = client.interactions.create(agent='deep-research-pro-preview-12-2025', input=instr, background=True)
+                interaction = client.interactions.create(agent='deep-research-pro-preview-12-2025', input=instruction, background=True)
                 while True:
-                    it = client.interactions.get(it.id)
-                    if it.status == "completed": return n, it.outputs[-1].text
-                    time.sleep(10)
-            else:
-                res = client.models.generate_content(model=brain_id, contents=instr, config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]) if tool_id == "Standard Search" else None)
-                return n, res.text
-        except Exception as e: return n, f"Error: {e}"
+                    interaction = client.interactions.get(interaction.id)
+                    if interaction.status == "completed": return agent_name, interaction.outputs[-1].text
+                    if interaction.status == "failed": return agent_name, f"Deep Research Error: {interaction.error}"
+                    time.sleep(15)
+            
+            elif tool_id == "Yahoo Finance":
+                prompt = f"{instruction}\n\nMARKET DATA CONTEXT:\n{yf_context}"
+                res = client.models.generate_content(model=brain_id, contents=prompt)
+                return agent_name, res.text
+            
+            else: 
+                res = client.models.generate_content(
+                    model=brain_id, 
+                    contents=instruction, 
+                    config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+                )
+                return agent_name, res.text
 
-    # Logic
-    base_run = set(prompts_to_run)
-    if any(p in dependent_agents for p in prompts_to_run): base_run.update(stock_base_agents)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        futs = {ex.submit(fire, n, gem_prompts[n]): n for n in base_run if n not in dependent_agents}
-        for f in concurrent.futures.as_completed(futs): n, t = f.result(); reports[n] = t
+        except Exception as e:
+            return agent_name, f"Error: {e}"
 
-    dep_run = [p for p in prompts_to_run if p in dependent_agents]
-    if dep_run:
-        ctx = "\n\n".join([f"==={k}===\n{v}" for k,v in reports.items() if k in stock_base_agents])
-        for n in dep_run: _, t = fire(n, gem_prompts[n], ctx); reports[n] = t
+    base_prompts_to_run = set([p for p in prompts_to_run if p not in dependent_agents])
+    dep_prompts_to_run = [p for p in prompts_to_run if p in dependent_agents]
 
-    final = {k: v for k, v in reports.items() if k in prompts_to_run}
-    zip_b = io.BytesIO()
-    with zipfile.ZipFile(zip_b, "w") as zf:
-        for n, t in final.items(): zf.writestr(f"{resolved_ticker}_{n}.doc", f"<html><body>{markdown.markdown(t)}</body></html>".encode('utf-8'))
+    if dep_prompts_to_run:
+        base_prompts_to_run.update(stock_base_agents)
+
+    if base_prompts_to_run:
+        global_tasks[email]["progress"] = f"Stage 1: Gathering necessary research data..."
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name]): name for name in base_prompts_to_run}
+            for future in concurrent.futures.as_completed(future_to_agent):
+                name, text = future.result()
+                if text: reports[name] = text
+
+    if dep_prompts_to_run:
+        global_tasks[email]["progress"] = "Stage 2: Synthesizing final thesis..."
+        aggregated_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in reports.items() if "Skipped" not in v and "Error" not in v and k in stock_base_agents])
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name], aggregated_context): name for name in dep_prompts_to_run}
+            for future in concurrent.futures.as_completed(future_to_agent):
+                name, text = future.result()
+                if text: reports[name] = text
+
+    final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
+
+    global_tasks[email]["progress"] = "Compiling ZIP and sending email..."
+    global_tasks[email]["reports"] = final_user_reports
     
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for name, text in final_user_reports.items():
+            safe_name = name.replace(" ", "_").replace("/", "-")
+            html_content = markdown.markdown(text, extensions=['tables'])
+            doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
+            zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode('utf-8'))
+    
+    warning_msg = ""
+    is_super = email in SUPER_USERS
+    if not is_super:
+        p_runs, p_reps, s_reps = get_usage(email)
+        if is_premium_run and (p_runs >= 4 or p_reps >= 6):
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features. You will not be able to run Deep Research or Gemini Pro for the next 48 hours."
+        elif not is_premium_run and s_reps >= 30:
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features. You will not be able to generate standard reports for the next 48 hours."
+
     try:
-        msg = MIMEMultipart(); msg['From'] = f"B.E Research <{email_sender}>"; msg['To'] = email; msg['Subject'] = f"🚀 Research: {resolved_company}"
-        msg.attach(MIMEText(f"B.E Research for {resolved_company} is attached.", 'plain'))
-        part = MIMEBase('application', 'octet-stream'); part.set_payload(zip_b.getvalue()); encoders.encode_base64(part)
-        part.add_header('Content-Disposition', f"attachment; filename={resolved_ticker}_Research.zip"); msg.attach(part)
-        server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls(); server.login(email_sender, email_pwd); server.send_message(msg); server.quit()
-    except: pass
-    global_tasks[email].update({"status": "complete", "reports": final, "zip": zip_b.getvalue()})
+        msg = MIMEMultipart()
+        msg['From'] = f"B.E Research <{email_sender}>"
+        msg['To'] = email
+        msg['Subject'] = f"🚀 Analysis Complete: {resolved_company}"
+        body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
+        msg.attach(MIMEText(body, 'plain'))
+        
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(zip_buffer.getvalue())
+        encoders.encode_base64(part)
+        part.add_header('Content-Disposition', f"attachment; filename={resolved_ticker}_BEResearch_Reports.zip")
+        msg.attach(part)
+        
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(email_sender, email_pwd)
+        server.send_message(msg)
+        server.quit()
+    except Exception as e:
+        print(f"Email failed: {e}")
 
-# --- 6. GENERATE BUTTON & BLOCKERS ---
-if st.button("🚀 Generate B.E Research Package", use_container_width=True):
-    if not user_email or "@" not in user_email: st.error("Email required."); st.stop()
-    if not selected: st.error("Select at least one report."); st.stop()
-    
-    # HARD BLOCKERS ENGINE
-    missing = []
-    if any(p in stock_base_agents + dependent_agents for p in selected) and not (t_company or t_ticker): missing.append("Company Name or Ticker Symbol")
-    if any(p in industry_agents for p in selected) and not t_industry: missing.append("Industry Sector")
-    if any(p in ceo_agents for p in selected) and not t_ceo: missing.append("CEO's Name")
-    if any(p in concept_agents for p in selected) and not t_concept: missing.append("Financial Concept")
-    
-    if missing:
-        st.error(f"🛑 **Action Required:** Please provide the following to generate the selected reports: {', '.join(missing)}")
+    global_tasks[email]["status"] = "complete"
+
+# --- 8. RUN BUTTON & BILLING GATEKEEPER ---
+if st.button("🚀 Generate B.E Research Report", use_container_width=True):
+    if not user_email or "@" not in user_email:
+        st.error("Please enter a valid email address.")
+        st.stop()
+        
+    if not selected_prompts:
+        st.error("Please select at least one report to generate.")
         st.stop()
 
-    is_p = (brain_id == "gemini-3.1-pro-preview" or tool_id == "Deep Research")
-    if user_email_clean not in SUPER_USERS:
-        p_r, _, s_r = get_usage(user_email_clean)
-        if is_p and p_r >= 4: st.error("Premium limit reached."); st.stop()
-        if not is_p and s_r + len(selected) > 30: st.error("Standard limit reached."); st.stop()
+    needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
+    needs_industry = any(p in industry_agents for p in selected_prompts)
+    needs_ceo = any(p in ceo_agents for p in selected_prompts)
+    needs_concept = any(p in concept_agents for p in selected_prompts)
 
-    log_usage(user_email_clean, is_p, len(selected)); save_lead(user_email_clean, t_ticker)
-    global_tasks[user_email_clean] = {"status": "running", "ticker": t_ticker, "count": len(selected)}
-    background_executor.submit(execute_background_job, user_email_clean, t_ticker, t_company, t_industry, t_ceo, t_concept, selected, brain_id, tool_id, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_p)
+    if needs_stock and not target_company.strip() and not target_ticker.strip():
+        st.error("Please provide either a Company Name OR a Ticker Symbol.")
+        st.stop()
+    if needs_industry and not target_industry.strip():
+        st.error("One or more selected reports require an Industry Sector.")
+        st.stop()
+    if needs_ceo and not target_company.strip() and not target_ticker.strip():
+        st.error("The CEO report needs to know the company. Please provide a Company Name or Ticker Symbol.")
+        st.stop()
+    if needs_concept and not target_concept.strip():
+        st.error("The Concept Education report requires a Financial Concept.")
+        st.stop()
 
+    is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
+    num_requested = len(selected_prompts)
+    
+    if not is_super_user:
+        p_runs, p_reps, s_reps = get_usage(user_email_clean)
+        
+        if is_premium_request:
+            if p_runs >= 4:
+                msg = "You have exhausted your 4 Premium runs for the last 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+            if p_reps + num_requested > 6:
+                rem = max(0, 6 - p_reps)
+                msg = f"You requested {num_requested} Premium reports, but only have {rem} remaining for the next 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+        else:
+            if s_reps + num_requested > 30:
+                rem = max(0, 30 - s_reps)
+                msg = f"You requested {num_requested} Standard reports, but only have {rem} remaining for the next 48 hours."
+                st.error(f"🛑 {msg}")
+                send_limit_email(user_email_clean, msg)
+                st.stop()
+                
+    log_usage(user_email_clean, is_premium_request, num_requested)
+
+    safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
+    save_lead(user_email_clean, safe_ticker_for_file)
+    
+    global_tasks[user_email_clean] = {"status": "running", "progress": "Starting...", "reports": {}, "ticker": safe_ticker_for_file}
+    
+    background_executor.submit(
+        execute_background_job, 
+        user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, 
+        selected_prompts, selected_brain, tool_choice, 
+        st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request
+    )
+
+# --- 9. UI STATE DISPLAY ---
 if user_email_clean in global_tasks:
     task = global_tasks[user_email_clean]
+    
     if task["status"] == "running":
-        est = (task["count"] * 35) / 60
-        st.info(f"⏳ **B.E Research Engine is working...** Est. time: ~{est:.1f} min.")
-        bar = st.progress(0)
-        for i in range(100): time.sleep(est * 0.15); bar.progress(i + 1)
+        st.info(f"⏳ **Running:** {task['progress']}")
+        st.caption("You can safely refresh this page or close the tab. The task is running in the background and will be emailed to you.")
+        time.sleep(3)
         st.rerun()
+        
     elif task["status"] == "complete":
-        st.success("✅ Research complete! Files emailed and available below.")
-        st.download_button("📥 Download Research ZIP", task["zip"], f"{task['ticker']}_BEResearch.zip", "application/zip", use_container_width=True)
-        for n, t in task["reports"].items():
-            with st.expander(f"View: {n}"): st.markdown(t)
+        st.success("✅ Analysis Complete! Check your email inbox.")
+        
+        st.header("📑 Your Reports")
+        for name, text in task["reports"].items():
+            with st.expander(f"View Report: {name}"):
+                st.markdown(text)
+        
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for name, text in task["reports"].items():
+                safe_name = name.replace(" ", "_").replace("/", "-")
+                html_content = markdown.markdown(text, extensions=['tables'])
+                doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
+                zip_file.writestr(f"{task['ticker']}_{safe_name}.doc", doc_content.encode('utf-8'))
+        
+        st.download_button(
+            label="📥 Download Reports as .ZIP",
+            data=zip_buffer.getvalue(),
+            file_name=f"{task['ticker']}_BEResearch_Reports.zip",
+            mime="application/zip",
+            use_container_width=True
+        )
