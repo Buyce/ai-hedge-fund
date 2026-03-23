@@ -1,26 +1,37 @@
-import streamlit as st
-import yfinance as yf
-import concurrent.futures
-import io
-import zipfile
-import sqlite3
-import pandas as pd
-import smtplib
-import time
-import markdown
-import requests
-from email.mime.multipart import MIMEMultipart
-from email.mime.base import MIMEBase
-from email.mime.text import MIMEText
-from email import encoders
-from datetime import datetime, timedelta
-from google import genai
-from google.genai import types
+# ==============================================================================
+# B.E RESEARCH INVESTING ASSISTANT - MASTER CODEBASE
+# ==============================================================================
+
+# --- IMPORTS ---
+import streamlit as st            
+import yfinance as yf             
+import concurrent.futures         
+import io                         
+import zipfile                    
+import sqlite3                    
+import pandas as pd               
+import smtplib                    
+import time                       
+import markdown                   
+import requests                   
+import json                       
+import ast                        
+import re                         
+from email.mime.multipart import MIMEMultipart 
+from email.mime.base import MIMEBase           
+from email.mime.text import MIMEText           
+from email import encoders                     
+from datetime import datetime, timedelta       
+from google import genai                       
+from google.genai import types                 
 
 # --- 0. SUPER USERS ---
 SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
 
-# --- 1. SELF-HEALING DATABASE & QUOTA LOGIC ---
+# ==============================================================================
+# --- 1. SELF-HEALING DATABASE, QUOTAS, & DOSSIER LOGIC ---
+# ==============================================================================
+
 def init_db():
     try:
         conn = sqlite3.connect("users.db")
@@ -28,6 +39,23 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS leads (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, target_ticker TEXT, timestamp TEXT)""")
         c.execute("""CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, run_timestamp TEXT, is_premium BOOLEAN, report_count INTEGER)""")
         c.execute("""CREATE TABLE IF NOT EXISTS alerts (email TEXT, alert_type TEXT, timestamp TEXT)""")
+        
+        # Permanent Library Table
+        c.execute("""CREATE TABLE IF NOT EXISTS dossiers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT,
+            ticker TEXT,
+            business_summary TEXT,
+            moat_notes TEXT,
+            management_notes TEXT,
+            key_metrics TEXT,
+            thesis TEXT,
+            anti_thesis TEXT,
+            valuation_assumptions TEXT,
+            watchlist_triggers TEXT,
+            last_updated TEXT,
+            UNIQUE(email, ticker)
+        )""")
         conn.commit(); conn.close()
     except Exception: pass
 
@@ -70,8 +98,10 @@ def send_limit_email(email, limit_msg):
         if c.fetchone()[0] == 0:
             try:
                 msg = MIMEMultipart()
-                msg["From"] = f"B.E Research <{st.secrets['EMAIL_SENDER']}>"; msg["To"] = email; msg["Subject"] = "Action Required: B.E Research Usage Limit Reached"
-                body = f"Hello,\n\nYou have reached a usage limit on the platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets to generate more reports.\n\nBest,\nB.E Research Team"
+                msg["From"] = f"B.E Research <{st.secrets['EMAIL_SENDER']}>"
+                msg["To"] = email
+                msg["Subject"] = "Action Required: B.E Research Usage Limit Reached"
+                body = f"Hello,\n\nYou have reached a usage limit on the platform.\n\nDETAIL: {limit_msg}\n\nPlease wait until your 48-hour rolling window resets.\n\nBest,\nB.E Research Team"
                 msg.attach(MIMEText(body, "plain"))
                 server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls(); server.login(st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"]); server.send_message(msg); server.quit()
                 c.execute("INSERT INTO alerts (email, alert_type, timestamp) VALUES (?, ?, ?)", (email, "limit", datetime.now().isoformat())); conn.commit()
@@ -79,12 +109,60 @@ def send_limit_email(email, limit_msg):
         conn.close()
     except Exception: pass
 
-# --- 2. SET UP THE WEB PAGE ---
+def save_dossier(email, ticker, data_dict):
+    """Saves the JSON to the DB. Includes a fix to prevent 'type dict is not supported' errors."""
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db"); c = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        # CRITICAL FIX: Forces any nested JSON dicts/lists into a clean string before hitting SQLite
+        def make_safe_string(val):
+            if isinstance(val, (dict, list)):
+                return json.dumps(val, indent=2)
+            return str(val) if val else "N/A"
+        
+        bs = make_safe_string(data_dict.get("business_summary", "N/A"))
+        mn = make_safe_string(data_dict.get("moat_notes", "N/A"))
+        mgn = make_safe_string(data_dict.get("management_notes", "N/A"))
+        km = make_safe_string(data_dict.get("key_metrics", "N/A"))
+        th = make_safe_string(data_dict.get("thesis", "N/A"))
+        ath = make_safe_string(data_dict.get("anti_thesis", "N/A"))
+        va = make_safe_string(data_dict.get("valuation_assumptions", "N/A"))
+        wt = make_safe_string(data_dict.get("watchlist_triggers", "N/A"))
+        
+        sql = """
+        INSERT INTO dossiers (email, ticker, business_summary, moat_notes, management_notes, key_metrics, thesis, anti_thesis, valuation_assumptions, watchlist_triggers, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(email, ticker) DO UPDATE SET
+            business_summary=excluded.business_summary, moat_notes=excluded.moat_notes,
+            management_notes=excluded.management_notes, key_metrics=excluded.key_metrics,
+            thesis=excluded.thesis, anti_thesis=excluded.anti_thesis,
+            valuation_assumptions=excluded.valuation_assumptions,
+            watchlist_triggers=excluded.watchlist_triggers, last_updated=excluded.last_updated;
+        """
+        c.execute(sql, (email, ticker, bs, mn, mgn, km, th, ath, va, wt, now))
+        conn.commit(); conn.close()
+    except Exception as e:
+        print(f"Dossier save error: {e}")
+
+def get_user_dossiers(email):
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db")
+        df = pd.read_sql_query("SELECT * FROM dossiers WHERE email=?", conn, params=(email,))
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+# ==============================================================================
+# --- 2. SET UP THE WEB PAGE & SESSION STATE ---
+# ==============================================================================
 st.set_page_config(page_title="B.E Research Investing Assistant", page_icon="📈", layout="wide")
 
 @st.cache_resource
 def get_task_registry(): return {}
-
 @st.cache_resource
 def get_executor(): return concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
@@ -98,14 +176,18 @@ if "company_input" not in st.session_state: st.session_state.company_input = ""
 if "ceo_input" not in st.session_state: st.session_state.ceo_input = ""
 if "concept_input" not in st.session_state: st.session_state.concept_input = ""
 if "industry_input" not in st.session_state: st.session_state.industry_input = ""
+if "market_pulse_data" not in st.session_state: st.session_state.market_pulse_data = "" 
 
-def estimate_total_seconds(report_count, brain_id, tool_id):
-    base_seconds = 20
+def estimate_total_seconds(report_count, brain_id, tool_id, generate_audio):
+    base_seconds = 30 
     if tool_id == "Deep Research": per_report = 120
     elif tool_id in ("Yahoo Finance Data", "Market Data"): per_report = 18
     else: per_report = 35
     if brain_id == "gemini-3.1-pro-preview": per_report += 20
-    return max(45, base_seconds + (report_count * per_report))
+    
+    total = max(45, base_seconds + (report_count * per_report))
+    if generate_audio: total += 60 
+    return total
 
 def format_eta(seconds_remaining):
     seconds_remaining = max(0, int(seconds_remaining))
@@ -134,29 +216,64 @@ def fetch_info_from_ticker():
         if ceo_name: st.session_state.ceo_input = ceo_name
     except Exception: pass
 
-# --- ELEVENLABS AUDIO HELPER (UPDATED TO CATCH ERRORS) ---
 def generate_elevenlabs_audio(text, voice_id, api_key):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": api_key
-    }
-    data = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}
-    }
+    headers = {"Accept": "audio/mpeg", "Content-Type": "application/json", "xi-api-key": api_key}
+    data = {"text": text, "model_id": "eleven_multilingual_v2", "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
     response = requests.post(url, json=data, headers=headers)
-    if response.status_code == 200:
-        return response.content
-    else:
-        # If it fails, we explicitly raise the error so the UI can catch and display it
-        raise Exception(f"API Error {response.status_code}: {response.text}")
+    if response.status_code == 200: return response.content
+    else: raise Exception(f"API Error {response.status_code}: {response.text}")
 
-# --- 4. INSTITUTIONAL PROMPT LIBRARY ---
+# --- LIVE MARKET PULSE API FUNCTIONS ---
+@st.cache_data(ttl=3600) 
+def get_live_trending_tickers(api_key):
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = """Search X (Twitter) financial trends, Yahoo Finance, and Google News right now. 
+        Identify the Top 5 most trending, bought, sold, or heavily researched stock tickers today.
+        Respond ONLY with a valid Python list of 5 ticker symbols as strings. No markdown, no explanations.
+        Example: ["NVDA", "TSLA", "AAPL", "PLTR", "MSTR"]"""
+        
+        res = client.models.generate_content(
+            model="gemini-3.1-flash-lite-preview",
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
+        )
+        match = re.search(r'\[.*?\]', res.text)
+        if match:
+            tickers = ast.literal_eval(match.group(0))
+            if isinstance(tickers, list) and len(tickers) > 0:
+                return tickers[:5] 
+        return ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
+    except Exception:
+        return ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
+
+def fetch_trending_market_pulse(api_key):
+    client = genai.Client(api_key=api_key)
+    prompt = """You are an expert Wall Street market analyst. Search the live internet right now, specifically looking at X (Twitter) financial trends, Google Search trends, and Yahoo Finance.
+    Identify and list the following:
+    1. Top 5 Trending Stocks overall right now.
+    2. Top 5 Recommended Buys currently being discussed by analysts.
+    3. Top 5 Recommended Sells or Heavily Shorted stocks.
+    4. Top 5 Most Researched/Searched stocks today.
+    
+    RULES: Format the output as a clean, highly readable Markdown report. Use bullet points, bold the Ticker Symbol, and include a 1-sentence reason why it is on the list based on current news or social media chatter."""
+    try:
+        res = client.models.generate_content(
+            model="gemini-3.1-pro-preview", 
+            contents=prompt, 
+            config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+        )
+        return res.text
+    except Exception as e:
+        return f"Could not fetch trending stocks at this moment. (Error: {str(e)})"
+
+
+# ==============================================================================
+# --- 4. INSTITUTIONAL PROMPT LIBRARY (FULLY RESTORED) ---
+# ==============================================================================
 gem_prompts = {
-    # --- DEPENDENT AGENTS (SYNTHESIS) ---
+   # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
@@ -346,6 +463,7 @@ VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candida
 }
 
 PODCAST_PROMPTS = {
+
     "Company": """ROLE: You are the scriptwriter for the B.E Research Investing Podcast.
 Focus: Explain [Company_name] like professional equity analysts. Base everything on the provided research.
 FORMATTING RULES (CRITICAL):
@@ -412,9 +530,11 @@ concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
+# ==============================================================================
 # --- 5. MAIN UI SETUP ---
+# ==============================================================================
 st.title("📈 B.E Research Investing Assistant")
-st.markdown("Wall Street-level stock and industry research, explained simply for everyday investors.")
+st.markdown("Wall Street-level stock and industry research, at the fingertips of everyday investors.")
 st.caption("⚠️ **Disclaimer:** The reports generated are for educational and informational purposes only and do not constitute financial, investment, or legal advice.")
 
 with st.sidebar:
@@ -429,8 +549,44 @@ with st.sidebar:
             conn.close()
         except Exception: st.error("Database initializing...")
 
+# ---------------------------------------------------------
+# STEP 1: TARGET INFORMATION
+# ---------------------------------------------------------
 st.markdown("### Step 1: Target Information")
-user_email = st.text_input("📧 Enter your email to receive the final report ZIP:")
+
+# --- LIVE TRENDING MARKET PULSE ENGINE ---
+with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", expanded=False):
+    st.markdown("Click below to search X, Yahoo Finance, and Google for today's top moving stocks.")
+    if st.button("🔍 Fetch Live Trending Data"):
+        with st.spinner("Searching the web for live market trends... This takes about 10 seconds."):
+            st.session_state.market_pulse_data = fetch_trending_market_pulse(st.secrets["GOOGLE_API_KEY"])
+    
+    if st.session_state.market_pulse_data:
+        st.markdown("---")
+        st.markdown(st.session_state.market_pulse_data)
+        st.markdown("---")
+
+# --- DYNAMIC LIVE TRENDING BUTTONS ---
+st.markdown("**Not sure where to start? Load a trending stock:**")
+
+# Fetch the live tickers in the background (using cache)
+with st.spinner("Scanning X & Yahoo Finance for live trends..."):
+    if "GOOGLE_API_KEY" in st.secrets:
+        trending_tickers = get_live_trending_tickers(st.secrets["GOOGLE_API_KEY"])
+    else:
+        trending_tickers = ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
+
+# Display the 5 buttons horizontally
+cols = st.columns(len(trending_tickers))
+for idx, ticker in enumerate(trending_tickers):
+    if cols[idx].button(f"🔥 Load {ticker}"):
+        st.session_state.ticker_input = ticker
+        fetch_info_from_ticker() 
+        st.rerun()
+
+st.write("") 
+
+user_email = st.text_input("📧 Enter your email to receive the final report ZIP and access your Library:")
 user_email_clean = user_email.strip().lower()
 
 is_super_user = user_email_clean in SUPER_USERS
@@ -454,19 +610,11 @@ with col2:
     target_ceo = st.text_input("CEO's Name (Optional):", key="ceo_input")
 
 st.markdown("---")
-st.markdown("### Step 2: Engine Configuration")
 
-cfg_col1, cfg_col2 = st.columns(2)
-with cfg_col1:
-    brain_options = {"Gemini 3.1 Flash Lite (Fastest / Cheapest)": "gemini-3.1-flash-lite-preview", "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview"}
-    selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()), index=0)
-    selected_brain = brain_options[selected_brain_label]
-
-with cfg_col2:
-    tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Market Data", "Deep Research"], index=0)
-
-st.markdown("---")
-st.markdown("### Step 3: Select Reports")
+# ---------------------------------------------------------
+# STEP 2: SELECT REPORTS & FEATURES
+# ---------------------------------------------------------
+st.markdown("### Step 2: Select Reports & Features")
 st.info("You can select multiple reports at once.")
 selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=[], placeholder="No reports selected yet...")
 
@@ -475,9 +623,28 @@ if "ELEVENLABS_API_KEY" in st.secrets:
 else:
     generate_audio = False
     st.caption("🎧 *Premium Audio Podcast feature disabled (Requires ELEVENLABS_API_KEY in secrets)*")
+
 st.markdown("---")
 
+# ---------------------------------------------------------
+# HIDDEN ENGINE ROOM (ADVANCED SETTINGS)
+# ---------------------------------------------------------
+with st.expander("⚙️ Advanced Engine Settings (Optional)"):
+    st.caption("By default, the assistant uses the fastest and most cost-effective settings. You can upgrade the reasoning engine or grounding method here.")
+    cfg_col1, cfg_col2 = st.columns(2)
+    with cfg_col1:
+        brain_options = {"Gemini 3.1 Flash Lite (Fastest / Cheapest)": "gemini-3.1-flash-lite-preview", "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview"}
+        selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()), index=0)
+        selected_brain = brain_options[selected_brain_label]
+
+    with cfg_col2:
+        tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Market Data", "Deep Research"], index=0)
+
+st.markdown("---")
+
+# ==============================================================================
 # --- 6. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
+# ==============================================================================
 def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run, gen_audio):
     update_task_progress(email, 0.05, "Initializing and resolving missing data...")
     client = genai.Client(api_key=api_key)
@@ -489,7 +656,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
 
     if resolved_company and not resolved_ticker:
         try:
-            prompt = f"What is the official stock ticker symbol for '{resolved_company}'? Return ONLY the symbol (e.g., TSLA). If it is a private company, reply PRIVATE."
+            prompt = f"What is the official stock ticker symbol for '{resolved_company}'? Return ONLY the symbol. If private, reply PRIVATE."
             res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
             ans = res.text.strip().replace("$", "").upper()
             if "PRIVATE" not in ans and len(ans) <= 10: resolved_ticker = ans
@@ -512,16 +679,32 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
 
     yf_context = ""
     if tool_id in ("Market Data", "Yahoo Finance Data"):
-        update_task_progress(email, 0.22, f"Collecting Market data for {resolved_ticker}...")
+        update_task_progress(email, 0.15, f"Collecting Market data for {resolved_ticker}...")
         try:
             stock = yf.Ticker(resolved_ticker); info = stock.info
             yf_context = f"BUSINESS SUMMARY:\n{info.get('longBusinessSummary', 'N/A')}\n\nFINANCIALS:\n{stock.financials.head(15).to_string()}\n"
         except Exception as e: yf_context = f"Could not fetch Market data: {e}"
 
     def fire_agent(agent_name, raw_instruction, extra_context=""):
-        instruction = (raw_instruction.replace("[STOCK NAME]", resolved_company).replace("[TICKER]", resolved_ticker).replace("[Company_name]", resolved_company).replace("[Company Name]", resolved_company).replace("{Company_Name}", resolved_company).replace("{{Company Name}}", resolved_company).replace("[COMPANY]", resolved_company).replace("{{CEO Name}}", resolved_ceo).replace("[INSERT INDUSTRY]", industry).replace("[INSERT INDUSTRY NAME]", industry).replace("[Industry Name]", industry).replace("[Insert Industry Name]", industry).replace("[Insert stock]", resolved_ticker).replace("{CONCEPT NAME}", concept))
-        instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into the raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report. MANDATORY: At the very bottom of your report, include a 'SOURCES & REFERENCES' section listing every document, financial filing, or dataset you used to generate these findings."
-
+        # CRITICAL FIX: Expanded the replacer to catch the lowercase [company_name] used in the Moat prompt
+        instruction = (raw_instruction
+            .replace("[STOCK NAME]", resolved_company)
+            .replace("[TICKER]", resolved_ticker)
+            .replace("[Company_name]", resolved_company)
+            .replace("[company_name]", resolved_company)  # <--- Here is the fix!
+            .replace("[Company Name]", resolved_company)
+            .replace("{Company_Name}", resolved_company)
+            .replace("{{Company Name}}", resolved_company)
+            .replace("[COMPANY]", resolved_company)
+            .replace("{{CEO Name}}", resolved_ceo)
+            .replace("[INSERT INDUSTRY]", industry)
+            .replace("[INSERT INDUSTRY NAME]", industry)
+            .replace("[Industry Name]", industry)
+            .replace("[Insert Industry Name]", industry)
+            .replace("[Insert stock]", resolved_ticker)
+            .replace("{CONCEPT NAME}", concept)
+        )
+        instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report."
         try:
             if extra_context and agent_name in dependent_agents:
                 prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
@@ -551,7 +734,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     total_base = len(base_prompts_to_run)
     total_dep = len(dep_prompts_to_run)
     completed_steps = 0
-    total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 1)
+    total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 3)
 
     if base_prompts_to_run:
         update_task_progress(email, 0.28, "Stage 1: Gathering research data...")
@@ -561,11 +744,11 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                 name, text = future.result()
                 if text: reports[name] = text
                 completed_steps += 1
-                pct = 0.28 + (completed_steps / total_steps) * 0.52
+                pct = 0.28 + (completed_steps / total_steps) * 0.45
                 update_task_progress(email, pct, f"Completed {completed_steps} of {total_base + total_dep} report tasks...")
 
     if dep_prompts_to_run:
-        update_task_progress(email, 0.82, "Stage 2: Synthesizing final thesis...")
+        update_task_progress(email, 0.75, "Stage 2: Synthesizing final thesis...")
         aggregated_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in reports.items() if "Skipped" not in v and "Error" not in v and k in stock_base_agents])
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name], aggregated_context): name for name in dep_prompts_to_run}
@@ -573,15 +756,64 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                 name, text = future.result()
                 if text: reports[name] = text
                 completed_steps += 1
-                pct = 0.82 + min(0.10, (completed_steps / total_steps) * 0.10)
+                pct = 0.75 + min(0.05, (completed_steps / total_steps) * 0.05)
                 update_task_progress(email, pct, f"Synthesizing final outputs ({completed_steps}/{total_base + total_dep})...")
 
     final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
     global_tasks[email]["reports"] = final_user_reports
 
+    # --- THE FIXED DOSSIER JSON EXTRACTION ---
+    update_task_progress(email, 0.82, "Updating Permanent Research Library (Dossier)...")
+    try:
+        dossier_context = "\n".join([f"==={k}===\n{v}" for k, v in final_user_reports.items()])
+        dossier_prompt = f"""You are a Master Portfolio Manager building a permanent dossier for {resolved_company} ({resolved_ticker}).
+        Based ONLY on the research below, extract and summarize the core elements into a strict JSON format. 
+        You must return ONLY a JSON object with these exact keys: "business_summary", "moat_notes", "management_notes", "key_metrics", "thesis", "anti_thesis", "valuation_assumptions", "watchlist_triggers".
+        If information is missing for a key, populate it with "Data not generated in this run."
+        
+        RESEARCH DATA:
+        {dossier_context}"""
+        
+        dos_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=dossier_prompt)
+        raw_json = dos_res.text.strip()
+        
+        # 100% safe stripping of markdown to prevent SyntaxErrors
+        if raw_json.startswith("```json"):
+            raw_json = raw_json[7:]
+        elif raw_json.startswith("```"):
+            raw_json = raw_json[3:]
+        if raw_json.endswith("```"):
+            raw_json = raw_json[:-3]
+            
+        raw_json = raw_json.strip()
+        parsed_dossier = json.loads(raw_json)
+        save_dossier(email, resolved_ticker, parsed_dossier)
+    except Exception as e:
+        print(f"Dossier generation skipped/failed: {e}")
+
+    # --- VISUAL EXECUTIVE SUMMARY ---
+    update_task_progress(email, 0.86, "Generating Visual Executive Summary...")
+    try:
+        summary_context = "\n".join([f"{k}: {v}" for k, v in final_user_reports.items()])
+        exec_prompt = f"""You are a Senior Analyst. Based ONLY on the following generated research for {resolved_company}, provide a fast executive summary for the user interface.
+FORMAT EXACTLY LIKE THIS:
+### 🚦 Final Verdict: [🟢 BUY, 🟡 HOLD, or 🔴 SELL]
+**Key Takeaways:**
+- [High impact insight 1]
+- [High impact insight 2]
+- [High impact insight 3]
+
+RESEARCH DATA:
+{summary_context}"""
+        exec_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=exec_prompt)
+        global_tasks[email]["exec_summary"] = exec_res.text.strip()
+    except Exception:
+        global_tasks[email]["exec_summary"] = None
+
+    # --- ELEVENLABS AUDIO ---
     audio_bytes = None
     if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
-        update_task_progress(email, 0.88, "Stage 3: Writing Co-Host Podcast Script...")
+        update_task_progress(email, 0.89, "Stage 3: Writing Co-Host Podcast Script...")
         try:
             if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"]
             elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"]
@@ -594,9 +826,9 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
             res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\nDATA:\n{pod_context}")
             script_text = res.text.strip()
             
-            update_task_progress(email, 0.91, "Stage 4: Generating ElevenLabs Premium Audio...")
-            voice_host_a = "29vD33N1CtxCmqQRPOHJ" # Drew 
-            voice_host_b = "21m00Tcm4TlvDq8ikWAM" # Rachel
+            update_task_progress(email, 0.92, "Stage 4: Generating ElevenLabs Premium Audio...")
+            voice_host_a = "29vD33N1CtxCmqQRPOHJ" # Drew (Male)
+            voice_host_b = "21m00Tcm4TlvDq8ikWAM" # Rachel (Female)
             api_key_11 = st.secrets["ELEVENLABS_API_KEY"]
             
             stitched_audio = b""
@@ -623,11 +855,11 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
                 audio_bytes = stitched_audio
                 global_tasks[email]["audio_data"] = audio_bytes
         except Exception as e:
-            # We save the error so we can display it to the user!
             global_tasks[email]["audio_error"] = str(e)
             global_tasks[email]["audio_data"] = None
 
-    update_task_progress(email, 0.94, "Compiling ZIP package...")
+    # --- ZIP COMPILATION ---
+    update_task_progress(email, 0.95, "Compiling ZIP package...")
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for name, text in final_user_reports.items():
@@ -640,51 +872,37 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
             
     global_tasks[email]["zip_data"] = zip_buffer.getvalue()
 
+    # --- EMAIL SENDING ---
     warning_msg = ""
-    is_super = email in SUPER_USERS
-    if not is_super:
+    if not (email in SUPER_USERS):
         p_runs, p_reps, s_reps = get_usage(email)
         if is_premium_run and (p_runs >= 4 or p_reps >= 6):
-            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features. You will not be able to run Deep Research or Gemini Pro for the next 48 hours."
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features for the next 48 hours."
         elif not is_premium_run and s_reps >= 30:
-            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features. You will not be able to generate standard reports for the next 48 hours."
+            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features for the next 48 hours."
 
     try:
-        update_task_progress(email, 0.97, "Sending final email delivery...")
+        update_task_progress(email, 0.98, "Sending final email delivery...")
         msg = MIMEMultipart()
-        msg["From"] = f"B.E Research <{email_sender}>"
-        msg["To"] = email
-        msg["Subject"] = f"🚀 Analysis Complete: {resolved_company}"
+        msg["From"] = f"B.E Research <{email_sender}>"; msg["To"] = email; msg["Subject"] = f"🚀 Analysis Complete: {resolved_company}"
         body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
         msg.attach(MIMEText(body, "plain"))
-
         part = MIMEBase("application", "octet-stream")
-        part.set_payload(zip_buffer.getvalue())
-        encoders.encode_base64(part)
+        part.set_payload(zip_buffer.getvalue()); encoders.encode_base64(part)
         part.add_header("Content-Disposition", f"attachment; filename={resolved_ticker}_BEResearch_Reports.zip")
         msg.attach(part)
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(email_sender, email_pwd)
-        server.send_message(msg)
-        server.quit()
-    except Exception as e:
-        print(f"Email failed: {e}")
+        server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls(); server.login(email_sender, email_pwd); server.send_message(msg); server.quit()
+    except Exception: pass
 
     update_task_progress(email, 1.0, "Completed.")
     global_tasks[email]["status"] = "complete"
 
-
-# --- 7. RUN BUTTON & BILLING GATEKEEPER ---
+# ==============================================================================
+# --- 7. RUN BUTTON & VALIDATION GATEKEEPER ---
+# ==============================================================================
 if st.button("🚀 Generate B.E Research Report", use_container_width=True):
-    if not user_email or "@" not in user_email:
-        st.error("Please enter a valid email address.")
-        st.stop()
-
-    if not selected_prompts:
-        st.error("Please select at least one report to generate.")
-        st.stop()
+    if not user_email or "@" not in user_email: st.error("Please enter a valid email address."); st.stop()
+    if not selected_prompts: st.error("Please select at least one report to generate."); st.stop()
 
     needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
     needs_industry = any(p in industry_agents for p in selected_prompts)
@@ -692,14 +910,10 @@ if st.button("🚀 Generate B.E Research Report", use_container_width=True):
     needs_concept = any(p in concept_agents for p in selected_prompts)
 
     missing_fields = []
-    if needs_stock and not (target_company.strip() or target_ticker.strip()):
-        missing_fields.append("**Company Name** OR **Ticker Symbol**")
-    if needs_industry and not target_industry.strip():
-        missing_fields.append("**Industry Sector**")
-    if needs_ceo and not target_ceo.strip():
-        missing_fields.append("**CEO's Name**")
-    if needs_concept and not target_concept.strip():
-        missing_fields.append("**Financial Concept**")
+    if needs_stock and not (target_company.strip() or target_ticker.strip()): missing_fields.append("**Company Name** OR **Ticker Symbol**")
+    if needs_industry and not target_industry.strip(): missing_fields.append("**Industry Sector**")
+    if needs_ceo and not target_ceo.strip(): missing_fields.append("**CEO's Name**")
+    if needs_concept and not target_concept.strip(): missing_fields.append("**Financial Concept**")
 
     if missing_fields:
         st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
@@ -710,94 +924,110 @@ if st.button("🚀 Generate B.E Research Report", use_container_width=True):
 
     if not is_super_user:
         p_runs, p_reps, s_reps = get_usage(user_email_clean)
-
         if is_premium_request:
-            if p_runs >= 4:
-                msg = "You have exhausted your 4 Premium runs for the last 48 hours."
-                st.error(f"🛑 {msg}")
-                send_limit_email(user_email_clean, msg)
-                st.stop()
-            if p_reps + num_requested > 6:
-                rem = max(0, 6 - p_reps)
-                msg = f"You requested {num_requested} Premium reports, but only have {rem} remaining for the next 48 hours."
-                st.error(f"🛑 {msg}")
-                send_limit_email(user_email_clean, msg)
-                st.stop()
+            if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs for the last 48 hours."); st.stop()
+            if p_reps + num_requested > 6: st.error(f"🛑 You requested {num_requested} Premium reports, but only have {max(0, 6 - p_reps)} remaining for the next 48 hours."); st.stop()
         else:
-            if s_reps + num_requested > 30:
-                rem = max(0, 30 - s_reps)
-                msg = f"You requested {num_requested} Standard reports, but only have {rem} remaining for the next 48 hours."
-                st.error(f"🛑 {msg}")
-                send_limit_email(user_email_clean, msg)
-                st.stop()
+            if s_reps + num_requested > 30: st.error(f"🛑 You requested {num_requested} Standard reports, but only have {max(0, 30 - s_reps)} remaining for the next 48 hours."); st.stop()
 
     log_usage(user_email_clean, is_premium_request, num_requested)
-    safe_ticker_for_file = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
-    save_lead(user_email_clean, safe_ticker_for_file)
+    safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
+    save_lead(user_email_clean, safe_ticker)
 
-    estimated_total_seconds = estimate_total_seconds(report_count=num_requested, brain_id=selected_brain, tool_id=tool_choice)
-    if generate_audio:
-        estimated_total_seconds += 45 # Buffer for TTS
+    base_time = 45 + (num_requested * (120 if tool_choice == "Deep Research" else 20))
+    if generate_audio: base_time += 60 
 
     global_tasks[user_email_clean] = {
-        "status": "running",
-        "progress": "Starting...",
-        "progress_pct": 0.02,
-        "reports": {},
-        "zip_data": None,
-        "audio_data": None,
-        "audio_error": None,
-        "ticker": safe_ticker_for_file,
-        "start_time": time.time(),
-        "estimated_total_seconds": estimated_total_seconds,
+        "status": "running", "progress": "Starting...", "progress_pct": 0.02,
+        "reports": {}, "zip_data": None, "audio_data": None, "audio_error": None, "exec_summary": None,
+        "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
     }
 
-    background_executor.submit(
-        execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept,
-        selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"],
-        is_premium_request, generate_audio
-    )
+    background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
 
-# --- 9. UI STATE DISPLAY ---
+# ==============================================================================
+# --- 8. UI STATE DISPLAY ---
+# ==============================================================================
 if user_email_clean in global_tasks:
     task = global_tasks[user_email_clean]
 
     if task["status"] == "running":
         elapsed = time.time() - task.get("start_time", time.time())
-        estimated_total = task.get("estimated_total_seconds", 60)
-        estimated_remaining = max(0, estimated_total - elapsed)
-
-        time_based_floor = min(0.95, elapsed / estimated_total) if estimated_total > 0 else 0.0
+        est_rem = max(0, task.get("estimated_total_seconds", 60) - elapsed)
+        
+        time_based_floor = min(0.95, elapsed / task.get("estimated_total_seconds", 60))
         visual_progress = max(task.get("progress_pct", 0.0), time_based_floor * 0.85)
 
         st.info(f"⏳ **Running:** {task['progress']}")
         st.progress(visual_progress)
-        st.caption(f"Estimated delivery time remaining: **{format_eta(estimated_remaining)}**")
-        st.caption("Your final ZIP will be delivered by email. You can safely refresh or close the tab while processing continues.")
-        time.sleep(2)
-        st.rerun()
+        st.caption(f"Estimated delivery time remaining: **{format_eta(est_rem)}**")
+        time.sleep(2); st.rerun()
 
     elif task["status"] == "complete":
         st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
 
-        # DIAGNOSER: Show audio if successful, or show the exact error if ElevenLabs rejected it.
+        if task.get("exec_summary"):
+            with st.container():
+                st.markdown("---")
+                st.markdown(task["exec_summary"])
+                st.markdown("---")
+
         if task.get("audio_data"):
             st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
             st.audio(task["audio_data"], format="audio/mp3")
         elif task.get("audio_error"):
             st.warning(f"⚠️ **Audio Generation Failed:** {task['audio_error']}")
-            st.caption("Your text reports and ZIP file were still generated successfully. This error is usually caused by an empty ElevenLabs Free Quota (Free limits run out fast!).")
+            st.caption("Your text reports and ZIP file were still generated successfully.")
 
         if task.get("zip_data"):
-            st.download_button(
-                label="📥 Direct Download: Research ZIP Package",
-                data=task["zip_data"],
-                file_name=f"{task['ticker']}_BEResearch.zip",
-                mime="application/zip",
-                use_container_width=True,
-            )
+            st.download_button(label="📥 Direct Download: Research ZIP Package", data=task["zip_data"], file_name=f"{task['ticker']}_BEResearch.zip", mime="application/zip", use_container_width=True)
 
         st.header("📑 Your Reports")
         for name, text in task["reports"].items():
             with st.expander(f"View Report: {name}"):
                 st.markdown(text)
+
+# ==============================================================================
+# --- 9. MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
+# Tucked neatly at the bottom to preserve your linear layout style.
+# ==============================================================================
+st.markdown("---")
+st.markdown("### 📚 My Research Library (Permanent Dossiers)")
+st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
+
+if not user_email_clean or "@" not in user_email_clean:
+    st.warning("Please enter your email at the top of the page (in Step 1) to access your saved library.")
+else:
+    # Fetch their saved dossiers from SQLite
+    dossier_df = get_user_dossiers(user_email_clean)
+    
+    if dossier_df.empty:
+        st.info("Your library is currently empty. Run your first stock report above to build your first dossier!")
+    else:
+        # Dropdown to select which saved stock to view
+        saved_tickers = dossier_df['ticker'].unique().tolist()
+        selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
+        
+        # Extract the specific row for the selected ticker
+        dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
+        
+        st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
+        st.caption(f"Last Updated: {dossier_data['last_updated']}")
+        
+        # Display the 8 Permanent Sections in clean expanders
+        with st.expander("📖 Business Summary", expanded=True):
+            st.markdown(dossier_data['business_summary'])
+        with st.expander("🏰 Moat Notes"):
+            st.markdown(dossier_data['moat_notes'])
+        with st.expander("👔 Management Notes"):
+            st.markdown(dossier_data['management_notes'])
+        with st.expander("📊 Key Metrics"):
+            st.markdown(dossier_data['key_metrics'])
+        with st.expander("🟢 Bull Thesis"):
+            st.markdown(dossier_data['thesis'])
+        with st.expander("🔴 Anti-Thesis (Risks)"):
+            st.markdown(dossier_data['anti_thesis'])
+        with st.expander("⚖️ Valuation Assumptions"):
+            st.markdown(dossier_data['valuation_assumptions'])
+        with st.expander("👀 Watchlist Triggers"):
+            st.markdown(dossier_data['watchlist_triggers'])
