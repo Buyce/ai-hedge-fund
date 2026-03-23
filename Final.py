@@ -40,7 +40,6 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, run_timestamp TEXT, is_premium BOOLEAN, report_count INTEGER)""")
         c.execute("""CREATE TABLE IF NOT EXISTS alerts (email TEXT, alert_type TEXT, timestamp TEXT)""")
         
-        # Permanent Library Table
         c.execute("""CREATE TABLE IF NOT EXISTS dossiers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT,
@@ -110,18 +109,15 @@ def send_limit_email(email, limit_msg):
     except Exception: pass
 
 def save_dossier(email, ticker, data_dict):
-    """Saves the JSON to the DB. Includes a fix to prevent 'type dict is not supported' errors."""
     init_db()
     try:
         conn = sqlite3.connect("users.db"); c = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        # CRITICAL FIX: Forces any nested JSON dicts/lists into a clean string before hitting SQLite
         def make_safe_string(val):
-            if isinstance(val, (dict, list)):
-                return json.dumps(val, indent=2)
+            if isinstance(val, (dict, list)): return json.dumps(val, indent=2)
             return str(val) if val else "N/A"
-        
+            
         bs = make_safe_string(data_dict.get("business_summary", "N/A"))
         mn = make_safe_string(data_dict.get("moat_notes", "N/A"))
         mgn = make_safe_string(data_dict.get("management_notes", "N/A"))
@@ -143,8 +139,7 @@ def save_dossier(email, ticker, data_dict):
         """
         c.execute(sql, (email, ticker, bs, mn, mgn, km, th, ath, va, wt, now))
         conn.commit(); conn.close()
-    except Exception as e:
-        print(f"Dossier save error: {e}")
+    except Exception as e: print(f"Dossier save error: {e}")
 
 def get_user_dossiers(email):
     init_db()
@@ -184,7 +179,6 @@ def estimate_total_seconds(report_count, brain_id, tool_id, generate_audio):
     elif tool_id in ("Yahoo Finance Data", "Market Data"): per_report = 18
     else: per_report = 35
     if brain_id == "gemini-3.1-pro-preview": per_report += 20
-    
     total = max(45, base_seconds + (report_count * per_report))
     if generate_audio: total += 60 
     return total
@@ -200,29 +194,65 @@ def update_task_progress(email, pct, detail):
         global_tasks[email]["progress_pct"] = max(0.0, min(1.0, pct))
         global_tasks[email]["progress"] = detail
 
+# --- NEW: THE DOUBLE-NET FALLBACK FIX FOR TICKER SEARCH ---
 def fetch_info_from_ticker():
     """
-    Triggered when the user types in the Ticker box.
-    It automatically tries to find the Company Name and CEO.
-    It tries Yahoo Finance first, and if that fails, it asks Gemini.
+    Auto-fills Company Name and CEO based on the Ticker symbol.
+    Includes an AI fallback because Yahoo Finance frequently blocks Streamlit Cloud IPs.
     """
     ticker = st.session_state.ticker_input.strip().upper()
     st.session_state.ticker_input = ticker
     if not ticker: return
     
-    # ATTEMPT 1: Yahoo Finance
+    company_name = ""
+    ceo_name = ""
+    
+    # ATTEMPT 1: Try Yahoo Finance (Gets blocked on Streamlit Cloud often)
     try:
-        stock = yf.Ticker(ticker); info = stock.info
+        stock = yf.Ticker(ticker)
+        info = stock.info
         company_name = info.get("longName") or info.get("shortName") or ""
-        if company_name: st.session_state.company_input = company_name
         
-        ceo_name = ""
         for officer in info.get("companyOfficers", []):
             title = str(officer.get("title", "")).upper()
             if "CEO" in title or "CHIEF EXECUTIVE" in title:
-                ceo_name = officer.get("name", ""); break
-        if ceo_name: st.session_state.ceo_input = ceo_name
-    except Exception: pass
+                ceo_name = officer.get("name", "")
+                break
+    except Exception:
+        pass # Yahoo blocked us. Move to Attempt 2!
+        
+    # ATTEMPT 2: Fallback to Gemini AI if Yahoo Finance failed or returned empty boxes
+    if not company_name or not ceo_name:
+        try:
+            if "GOOGLE_API_KEY" in st.secrets:
+                client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
+                prompt = f"What is the official Company Name and the current CEO's name for the stock ticker '{ticker}'? Return EXACTLY a JSON format: {{\"company_name\": \"Name\", \"ceo_name\": \"Name\"}}"
+                
+                # Use Flash Lite because it is incredibly fast and cheap
+                res = client.models.generate_content(
+                    model="gemini-3.1-flash-lite-preview", 
+                    contents=prompt
+                )
+                
+                # CRITICAL FIX: Safe JSON parsing using replace instead of startswith
+                raw_json = res.text.strip()
+                raw_json = raw_json.replace("```json", "").replace("```", "").strip()
+                
+                parsed = json.loads(raw_json)
+                
+                # Only update if Yahoo Finance didn't already find it
+                if not company_name:
+                    company_name = parsed.get("company_name", "")
+                if not ceo_name:
+                    ceo_name = parsed.get("ceo_name", "")
+        except Exception:
+            pass # If both fail, leave it blank for the user to type manually
+
+    # Finally, push the found data into the UI text boxes
+    if company_name: 
+        st.session_state.company_input = company_name
+    if ceo_name: 
+        st.session_state.ceo_input = ceo_name
 
 def generate_elevenlabs_audio(text, voice_id, api_key):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -232,7 +262,6 @@ def generate_elevenlabs_audio(text, voice_id, api_key):
     if response.status_code == 200: return response.content
     else: raise Exception(f"API Error {response.status_code}: {response.text}")
 
-# --- LIVE MARKET PULSE API FUNCTIONS ---
 @st.cache_data(ttl=3600) 
 def get_live_trending_tickers(api_key):
     try:
@@ -247,6 +276,7 @@ def get_live_trending_tickers(api_key):
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
         )
+        
         match = re.search(r'\[.*?\]', res.text)
         if match:
             tickers = ast.literal_eval(match.group(0))
@@ -278,10 +308,10 @@ def fetch_trending_market_pulse(api_key):
 
 
 # ==============================================================================
-# --- 4. INSTITUTIONAL PROMPT LIBRARY (FULLY RESTORED) ---
+# --- 4. INSTITUTIONAL PROMPT LIBRARY ---
 # ==============================================================================
 gem_prompts = {
-   # --- DEPENDENT AGENTS (SYNTHESIS) ---
+    # --- DEPENDENT AGENTS (SYNTHESIS) ---
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
@@ -471,7 +501,6 @@ VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candida
 }
 
 PODCAST_PROMPTS = {
-
     "Company": """ROLE: You are the scriptwriter for the B.E Research Investing Podcast.
 Focus: Explain [Company_name] like professional equity analysts. Base everything on the provided research.
 FORMATTING RULES (CRITICAL):
@@ -543,11 +572,10 @@ stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents 
 # ==============================================================================
 st.title("📈 B.E Research Investing Assistant")
 st.markdown("Wall Street-level stock and industry research, at the fingertips of everyday investors.")
-st.caption("⚠️ **Disclaimer:** The reports generated are for educational and informational purposes only and do not constitute financial, investment, or legal advice.")
+st.caption("⚠️ **Disclaimer:** The reports generated are for educational and informational purposes only and do not constitute financial advice.")
 
 with st.sidebar:
     st.header("🔐 Admin Dashboard")
-    st.info("Regular users do not need to access this menu.")
     auth_pass = st.text_input("Admin Password", type="password")
     if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
         st.success("Authenticated")
@@ -555,18 +583,17 @@ with st.sidebar:
             conn = sqlite3.connect("users.db"); df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
             st.dataframe(df, use_container_width=True); st.download_button("📥 Export CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
             conn.close()
-        except Exception: st.error("Database initializing...")
+        except Exception: pass
 
 # ---------------------------------------------------------
 # STEP 1: TARGET INFORMATION
 # ---------------------------------------------------------
 st.markdown("### Step 1: Target Information")
 
-# --- LIVE TRENDING MARKET PULSE ENGINE ---
 with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", expanded=False):
     st.markdown("Click below to search X, Yahoo Finance, and Google for today's top moving stocks.")
     if st.button("🔍 Fetch Live Trending Data"):
-        with st.spinner("Searching the web for live market trends... This takes about 10 seconds."):
+        with st.spinner("Searching the web for live market trends..."):
             st.session_state.market_pulse_data = fetch_trending_market_pulse(st.secrets["GOOGLE_API_KEY"])
     
     if st.session_state.market_pulse_data:
@@ -574,17 +601,14 @@ with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", ex
         st.markdown(st.session_state.market_pulse_data)
         st.markdown("---")
 
-# --- DYNAMIC LIVE TRENDING BUTTONS ---
 st.markdown("**Not sure where to start? Load a trending stock:**")
 
-# Fetch the live tickers in the background (using cache)
 with st.spinner("Scanning X & Yahoo Finance for live trends..."):
     if "GOOGLE_API_KEY" in st.secrets:
         trending_tickers = get_live_trending_tickers(st.secrets["GOOGLE_API_KEY"])
     else:
         trending_tickers = ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
 
-# Display the 5 buttons horizontally
 cols = st.columns(len(trending_tickers))
 for idx, ticker in enumerate(trending_tickers):
     if cols[idx].button(f"🔥 Load {ticker}"):
@@ -638,7 +662,7 @@ st.markdown("---")
 # HIDDEN ENGINE ROOM (ADVANCED SETTINGS)
 # ---------------------------------------------------------
 with st.expander("⚙️ Advanced Engine Settings (Optional)"):
-    st.caption("By default, the assistant uses the fastest and most cost-effective settings. You can upgrade the reasoning engine or grounding method here.")
+    st.caption("By default, the assistant uses the fastest and most cost-effective settings.")
     cfg_col1, cfg_col2 = st.columns(2)
     with cfg_col1:
         brain_options = {"Gemini 3.1 Flash Lite (Fastest / Cheapest)": "gemini-3.1-flash-lite-preview", "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview"}
@@ -694,12 +718,11 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         except Exception as e: yf_context = f"Could not fetch Market data: {e}"
 
     def fire_agent(agent_name, raw_instruction, extra_context=""):
-        # CRITICAL FIX: Expanded the replacer to catch the lowercase [company_name] used in the Moat prompt
         instruction = (raw_instruction
             .replace("[STOCK NAME]", resolved_company)
             .replace("[TICKER]", resolved_ticker)
             .replace("[Company_name]", resolved_company)
-            .replace("[company_name]", resolved_company)  # <--- Here is the fix!
+            .replace("[company_name]", resolved_company)
             .replace("[Company Name]", resolved_company)
             .replace("{Company_Name}", resolved_company)
             .replace("{{Company Name}}", resolved_company)
@@ -713,6 +736,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
             .replace("{CONCEPT NAME}", concept)
         )
         instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report."
+
         try:
             if extra_context and agent_name in dependent_agents:
                 prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
@@ -742,7 +766,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     total_base = len(base_prompts_to_run)
     total_dep = len(dep_prompts_to_run)
     completed_steps = 0
-    total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 3)
+    total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 3) 
 
     if base_prompts_to_run:
         update_task_progress(email, 0.28, "Stage 1: Gathering research data...")
@@ -770,7 +794,7 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
     final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
     global_tasks[email]["reports"] = final_user_reports
 
-    # --- THE FIXED DOSSIER JSON EXTRACTION ---
+    # --- JSON DOSSIER EXTRACTION (FIXED TO PREVENT SYNTAX CRASHES) ---
     update_task_progress(email, 0.82, "Updating Permanent Research Library (Dossier)...")
     try:
         dossier_context = "\n".join([f"==={k}===\n{v}" for k, v in final_user_reports.items()])
@@ -783,23 +807,16 @@ def execute_background_job(email, ticker, company, industry, ceo, concept, promp
         {dossier_context}"""
         
         dos_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=dossier_prompt)
-        raw_json = dos_res.text.strip()
         
-        # 100% safe stripping of markdown to prevent SyntaxErrors
-        if raw_json.startswith("```json"):
-            raw_json = raw_json[7:]
-        elif raw_json.startswith("```"):
-            raw_json = raw_json[3:]
-        if raw_json.endswith("```"):
-            raw_json = raw_json[:-3]
+        # Safe extraction: Uses .replace() to strip markdown blocks cleanly without causing code cut-offs
+        raw_json = dos_res.text.strip()
+        raw_json = raw_json.replace("```json", "").replace("```", "").strip()
             
-        raw_json = raw_json.strip()
         parsed_dossier = json.loads(raw_json)
         save_dossier(email, resolved_ticker, parsed_dossier)
     except Exception as e:
         print(f"Dossier generation skipped/failed: {e}")
 
-    # --- VISUAL EXECUTIVE SUMMARY ---
     update_task_progress(email, 0.86, "Generating Visual Executive Summary...")
     try:
         summary_context = "\n".join([f"{k}: {v}" for k, v in final_user_reports.items()])
@@ -818,7 +835,6 @@ RESEARCH DATA:
     except Exception:
         global_tasks[email]["exec_summary"] = None
 
-    # --- ELEVENLABS AUDIO ---
     audio_bytes = None
     if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
         update_task_progress(email, 0.89, "Stage 3: Writing Co-Host Podcast Script...")
@@ -866,7 +882,6 @@ RESEARCH DATA:
             global_tasks[email]["audio_error"] = str(e)
             global_tasks[email]["audio_data"] = None
 
-    # --- ZIP COMPILATION ---
     update_task_progress(email, 0.95, "Compiling ZIP package...")
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -880,7 +895,6 @@ RESEARCH DATA:
             
     global_tasks[email]["zip_data"] = zip_buffer.getvalue()
 
-    # --- EMAIL SENDING ---
     warning_msg = ""
     if not (email in SUPER_USERS):
         p_runs, p_reps, s_reps = get_usage(email)
@@ -909,7 +923,7 @@ RESEARCH DATA:
 # --- 7. RUN BUTTON & VALIDATION GATEKEEPER ---
 # ==============================================================================
 if st.button("🚀 Generate B.E Research Report", use_container_width=True):
-    if not user_email or "@" not in user_email: st.error("Please enter a valid email address."); st.stop()
+    if not user_email or "@" not in user_email: st.error("Please enter a valid email address at the top."); st.stop()
     if not selected_prompts: st.error("Please select at least one report to generate."); st.stop()
 
     needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
@@ -997,7 +1011,6 @@ if user_email_clean in global_tasks:
 
 # ==============================================================================
 # --- 9. MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
-# Tucked neatly at the bottom to preserve your linear layout style.
 # ==============================================================================
 st.markdown("---")
 st.markdown("### 📚 My Research Library (Permanent Dossiers)")
@@ -1006,23 +1019,19 @@ st.markdown("Every time you generate research on a stock, its core elements are 
 if not user_email_clean or "@" not in user_email_clean:
     st.warning("Please enter your email at the top of the page (in Step 1) to access your saved library.")
 else:
-    # Fetch their saved dossiers from SQLite
     dossier_df = get_user_dossiers(user_email_clean)
     
     if dossier_df.empty:
         st.info("Your library is currently empty. Run your first stock report above to build your first dossier!")
     else:
-        # Dropdown to select which saved stock to view
         saved_tickers = dossier_df['ticker'].unique().tolist()
         selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
         
-        # Extract the specific row for the selected ticker
         dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
         
         st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
         st.caption(f"Last Updated: {dossier_data['last_updated']}")
         
-        # Display the 8 Permanent Sections in clean expanders
         with st.expander("📖 Business Summary", expanded=True):
             st.markdown(dossier_data['business_summary'])
         with st.expander("🏰 Moat Notes"):
