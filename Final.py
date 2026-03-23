@@ -201,13 +201,21 @@ def update_task_progress(email, pct, detail):
         global_tasks[email]["progress"] = detail
 
 def fetch_info_from_ticker():
+    """
+    Triggered when the user types in the Ticker box.
+    It automatically tries to find the Company Name and CEO.
+    It tries Yahoo Finance first, and if that fails, it asks Gemini.
+    """
     ticker = st.session_state.ticker_input.strip().upper()
     st.session_state.ticker_input = ticker
     if not ticker: return
+    
+    # ATTEMPT 1: Yahoo Finance
     try:
         stock = yf.Ticker(ticker); info = stock.info
         company_name = info.get("longName") or info.get("shortName") or ""
         if company_name: st.session_state.company_input = company_name
+        
         ceo_name = ""
         for officer in info.get("companyOfficers", []):
             title = str(officer.get("title", "")).upper()
