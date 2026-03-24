@@ -809,17 +809,24 @@ with tab1:
 
             update_task_progress(email, 0.83, "Calculating Transparent Scorecard...")
             try:
-                scorecard_prompt = f"""You are a Master Portfolio Manager. Based ONLY on the generated research for {resolved_company}, create a transparent, quantitative scorecard.
+                scorecard_prompt = f"""You are a ruthless, highly skeptical Master Portfolio Manager. Based ONLY on the generated research for {resolved_company}, create a transparent, quantitative scorecard.
                 Evaluate the company across these 7 categories: "Business Quality", "Capital Allocation", "Balance Sheet", "Valuation", "Growth Durability", "Management Alignment", "Macro Resilience".
                 
+                CRITICAL GRADING RUBRIC (BE EXTREMELY HARSH):
+                - 9.0 to 10.0: Absolute perfection. Generational monopoly. Extremely rare.
+                - 7.0 to 8.9: Great, but has noticeable flaws or risks.
+                - 5.0 to 6.9: Completely average. Mediocre.
+                - 1.0 to 4.9: Flawed, dangerous, or highly risky.
+                Do NOT hand out 9s or 10s easily. Penalize high debt, expensive multiples, or weak moats aggressively.
+                
                 You must return ONLY a strict JSON object where each category is a key. Inside each category, provide:
-                - "score": A number out of 10.
-                - "why": A 1-sentence rationale.
+                - "score": A number out of 10 (use one decimal place, e.g., 6.5).
+                - "why": A 1-sentence harsh rationale.
                 - "metrics": The specific metric evaluated (e.g., ROIC, Debt/EBITDA).
                 - "confidence": "Low", "Medium", or "High".
                 
                 Example Format:
-                {{ "Business Quality": {{"score": 8, "why": "Strong moat.", "metrics": "Gross Margin", "confidence": "High"}} }}
+                {{ "Business Quality": {{"score": 6.5, "why": "Average moat with high competitive threats.", "metrics": "Gross Margin", "confidence": "High"}} }}
                 
                 RESEARCH DATA:
                 {dossier_context}
