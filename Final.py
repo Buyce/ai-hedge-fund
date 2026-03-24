@@ -55,6 +55,12 @@ def init_db():
             last_updated TEXT,
             UNIQUE(email, ticker)
         )""")
+        
+        try:
+            c.execute("ALTER TABLE dossiers ADD COLUMN scorecard TEXT")
+        except Exception:
+            pass 
+            
         conn.commit(); conn.close()
     except Exception: pass
 
@@ -108,7 +114,7 @@ def send_limit_email(email, limit_msg):
         conn.close()
     except Exception: pass
 
-def save_dossier(email, ticker, data_dict):
+def save_dossier(email, ticker, data_dict, scorecard_dict):
     init_db()
     try:
         conn = sqlite3.connect("users.db"); c = conn.cursor()
@@ -127,17 +133,21 @@ def save_dossier(email, ticker, data_dict):
         va = make_safe_string(data_dict.get("valuation_assumptions", "N/A"))
         wt = make_safe_string(data_dict.get("watchlist_triggers", "N/A"))
         
+        sc_json = json.dumps(scorecard_dict) if scorecard_dict else "{}"
+        
         sql = """
-        INSERT INTO dossiers (email, ticker, business_summary, moat_notes, management_notes, key_metrics, thesis, anti_thesis, valuation_assumptions, watchlist_triggers, last_updated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO dossiers (email, ticker, business_summary, moat_notes, management_notes, key_metrics, thesis, anti_thesis, valuation_assumptions, watchlist_triggers, scorecard, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(email, ticker) DO UPDATE SET
             business_summary=excluded.business_summary, moat_notes=excluded.moat_notes,
             management_notes=excluded.management_notes, key_metrics=excluded.key_metrics,
             thesis=excluded.thesis, anti_thesis=excluded.anti_thesis,
             valuation_assumptions=excluded.valuation_assumptions,
-            watchlist_triggers=excluded.watchlist_triggers, last_updated=excluded.last_updated;
+            watchlist_triggers=excluded.watchlist_triggers, 
+            scorecard=excluded.scorecard,
+            last_updated=excluded.last_updated;
         """
-        c.execute(sql, (email, ticker, bs, mn, mgn, km, th, ath, va, wt, now))
+        c.execute(sql, (email, ticker, bs, mn, mgn, km, th, ath, va, wt, sc_json, now))
         conn.commit(); conn.close()
     except Exception as e: print(f"Dossier save error: {e}")
 
@@ -152,7 +162,7 @@ def get_user_dossiers(email):
         return pd.DataFrame()
 
 # ==============================================================================
-# --- 2. SET UP THE WEB PAGE & SESSION STATE ---
+# --- 2. SET UP THE WEB PAGE & HELPER FUNCTIONS ---
 # ==============================================================================
 st.set_page_config(page_title="B.E Research Investing Assistant", page_icon="📈", layout="wide")
 
@@ -194,65 +204,36 @@ def update_task_progress(email, pct, detail):
         global_tasks[email]["progress_pct"] = max(0.0, min(1.0, pct))
         global_tasks[email]["progress"] = detail
 
-# --- NEW: THE DOUBLE-NET FALLBACK FIX FOR TICKER SEARCH ---
 def fetch_info_from_ticker():
-    """
-    Auto-fills Company Name and CEO based on the Ticker symbol.
-    Includes an AI fallback because Yahoo Finance frequently blocks Streamlit Cloud IPs.
-    """
     ticker = st.session_state.ticker_input.strip().upper()
     st.session_state.ticker_input = ticker
     if not ticker: return
-    
     company_name = ""
     ceo_name = ""
     
-    # ATTEMPT 1: Try Yahoo Finance (Gets blocked on Streamlit Cloud often)
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+        stock = yf.Ticker(ticker); info = stock.info
         company_name = info.get("longName") or info.get("shortName") or ""
-        
         for officer in info.get("companyOfficers", []):
             title = str(officer.get("title", "")).upper()
             if "CEO" in title or "CHIEF EXECUTIVE" in title:
-                ceo_name = officer.get("name", "")
-                break
-    except Exception:
-        pass # Yahoo blocked us. Move to Attempt 2!
+                ceo_name = officer.get("name", ""); break
+    except Exception: pass
         
-    # ATTEMPT 2: Fallback to Gemini AI if Yahoo Finance failed or returned empty boxes
     if not company_name or not ceo_name:
         try:
             if "GOOGLE_API_KEY" in st.secrets:
                 client = genai.Client(api_key=st.secrets["GOOGLE_API_KEY"])
                 prompt = f"What is the official Company Name and the current CEO's name for the stock ticker '{ticker}'? Return EXACTLY a JSON format: {{\"company_name\": \"Name\", \"ceo_name\": \"Name\"}}"
-                
-                # Use Flash Lite because it is incredibly fast and cheap
-                res = client.models.generate_content(
-                    model="gemini-3.1-flash-lite-preview", 
-                    contents=prompt
-                )
-                
-                # CRITICAL FIX: Safe JSON parsing using replace instead of startswith
-                raw_json = res.text.strip()
-                raw_json = raw_json.replace("```json", "").replace("```", "").strip()
-                
+                res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
+                raw_json = res.text.strip().replace("```json", "").replace("```", "").strip()
                 parsed = json.loads(raw_json)
-                
-                # Only update if Yahoo Finance didn't already find it
-                if not company_name:
-                    company_name = parsed.get("company_name", "")
-                if not ceo_name:
-                    ceo_name = parsed.get("ceo_name", "")
-        except Exception:
-            pass # If both fail, leave it blank for the user to type manually
+                if not company_name: company_name = parsed.get("company_name", "")
+                if not ceo_name: ceo_name = parsed.get("ceo_name", "")
+        except Exception: pass
 
-    # Finally, push the found data into the UI text boxes
-    if company_name: 
-        st.session_state.company_input = company_name
-    if ceo_name: 
-        st.session_state.ceo_input = ceo_name
+    if company_name: st.session_state.company_input = company_name
+    if ceo_name: st.session_state.ceo_input = ceo_name
 
 def generate_elevenlabs_audio(text, voice_id, api_key):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
@@ -270,21 +251,16 @@ def get_live_trending_tickers(api_key):
         Identify the Top 5 most trending, bought, sold, or heavily researched stock tickers today.
         Respond ONLY with a valid Python list of 5 ticker symbols as strings. No markdown, no explanations.
         Example: ["NVDA", "TSLA", "AAPL", "PLTR", "MSTR"]"""
-        
         res = client.models.generate_content(
-            model="gemini-3.1-flash-lite-preview",
-            contents=prompt,
+            model="gemini-3.1-flash-lite-preview", contents=prompt,
             config=types.GenerateContentConfig(temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
         )
-        
         match = re.search(r'\[.*?\]', res.text)
         if match:
             tickers = ast.literal_eval(match.group(0))
-            if isinstance(tickers, list) and len(tickers) > 0:
-                return tickers[:5] 
+            if isinstance(tickers, list) and len(tickers) > 0: return tickers[:5] 
         return ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
-    except Exception:
-        return ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
+    except Exception: return ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
 
 def fetch_trending_market_pulse(api_key):
     client = genai.Client(api_key=api_key)
@@ -294,18 +270,37 @@ def fetch_trending_market_pulse(api_key):
     2. Top 5 Recommended Buys currently being discussed by analysts.
     3. Top 5 Recommended Sells or Heavily Shorted stocks.
     4. Top 5 Most Researched/Searched stocks today.
-    
     RULES: Format the output as a clean, highly readable Markdown report. Use bullet points, bold the Ticker Symbol, and include a 1-sentence reason why it is on the list based on current news or social media chatter."""
     try:
         res = client.models.generate_content(
-            model="gemini-3.1-pro-preview", 
-            contents=prompt, 
+            model="gemini-3.1-pro-preview", contents=prompt, 
             config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
         )
         return res.text
-    except Exception as e:
-        return f"Could not fetch trending stocks at this moment. (Error: {str(e)})"
+    except Exception as e: return f"Could not fetch trending stocks at this moment. (Error: {str(e)})"
 
+def display_ui_scorecard(scorecard_data):
+    if not scorecard_data or not isinstance(scorecard_data, dict):
+        return
+        
+    st.markdown("### 📊 Transparent Scorecard")
+    st.caption("A data-driven, transparent scoring framework out of 10. *We show our math.*")
+    
+    for category, details in scorecard_data.items():
+        if isinstance(details, dict):
+            try: score_val = float(details.get("score", 0))
+            except ValueError: score_val = 0.0
+            
+            score_val = max(0.0, min(score_val, 10.0))
+            
+            st.markdown(f"**{category}: {score_val}/10**")
+            st.progress(score_val / 10.0)
+            
+            c1, c2 = st.columns([1, 2])
+            c1.markdown(f"**Confidence:** {details.get('confidence', 'N/A')}")
+            c2.markdown(f"**Metrics Evaluated:** {details.get('metrics', 'N/A')}")
+            st.markdown(f"> **Why:** {details.get('why', 'N/A')}")
+            st.markdown("---")
 
 # ==============================================================================
 # --- 4. INSTITUTIONAL PROMPT LIBRARY ---
@@ -567,8 +562,9 @@ concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
 stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
 
+
 # ==============================================================================
-# --- 5. MAIN UI SETUP ---
+# --- 5. MAIN UI SETUP & TABS ROUTING ---
 # ==============================================================================
 st.title("📈 B.E Research Investing Assistant")
 st.markdown("Wall Street-level stock and industry research, at the fingertips of everyday investors.")
@@ -585,242 +581,263 @@ with st.sidebar:
             conn.close()
         except Exception: pass
 
-# ---------------------------------------------------------
-# STEP 1: TARGET INFORMATION
-# ---------------------------------------------------------
-st.markdown("### Step 1: Target Information")
-
-with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", expanded=False):
-    st.markdown("Click below to search X, Yahoo Finance, and Google for today's top moving stocks.")
-    if st.button("🔍 Fetch Live Trending Data"):
-        with st.spinner("Searching the web for live market trends..."):
-            st.session_state.market_pulse_data = fetch_trending_market_pulse(st.secrets["GOOGLE_API_KEY"])
-    
-    if st.session_state.market_pulse_data:
-        st.markdown("---")
-        st.markdown(st.session_state.market_pulse_data)
-        st.markdown("---")
-
-st.markdown("**Not sure where to start? Load a trending stock:**")
-
-with st.spinner("Scanning X & Yahoo Finance for live trends..."):
-    if "GOOGLE_API_KEY" in st.secrets:
-        trending_tickers = get_live_trending_tickers(st.secrets["GOOGLE_API_KEY"])
-    else:
-        trending_tickers = ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
-
-cols = st.columns(len(trending_tickers))
-for idx, ticker in enumerate(trending_tickers):
-    if cols[idx].button(f"🔥 Load {ticker}"):
-        st.session_state.ticker_input = ticker
-        fetch_info_from_ticker() 
-        st.rerun()
-
-st.write("") 
-
-user_email = st.text_input("📧 Enter your email to receive the final report ZIP and access your Library:")
-user_email_clean = user_email.strip().lower()
-
-is_super_user = user_email_clean in SUPER_USERS
-if user_email_clean and "@" in user_email_clean:
-    if is_super_user: st.success("🌟 Super User Access: Unlimited Reports Available")
-    else:
-        p_runs, p_reps, s_reps = get_usage(user_email_clean)
-        st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
-        q1, q2, q3 = st.columns(3)
-        q1.metric("Premium Runs", f"{max(0, 4 - p_runs)} / 4")
-        q2.metric("Premium Reports", f"{max(0, 6 - p_reps)} / 6")
-        q3.metric("Standard Reports", f"{max(0, 30 - s_reps)} / 30")
-
-col1, col2 = st.columns(2)
-with col1:
-    target_company = st.text_input("Company Name (e.g., Tesla):", key="company_input")
-    target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_info_from_ticker)
-    target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):", key="concept_input")
-with col2:
-    target_industry = st.text_input("Industry (e.g., Electric Vehicles):", key="industry_input")
-    target_ceo = st.text_input("CEO's Name (Optional):", key="ceo_input")
-
-st.markdown("---")
-
-# ---------------------------------------------------------
-# STEP 2: SELECT REPORTS & FEATURES
-# ---------------------------------------------------------
-st.markdown("### Step 2: Select Reports & Features")
-st.info("You can select multiple reports at once.")
-selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=[], placeholder="No reports selected yet...")
-
-if "ELEVENLABS_API_KEY" in st.secrets:
-    generate_audio = st.checkbox("🎧 Generate an AI Co-Host Audio Podcast (.mp3)", help="Powered by ElevenLabs. This synthesizes your reports into a premium, human-sounding podcast.")
-else:
-    generate_audio = False
-    st.caption("🎧 *Premium Audio Podcast feature disabled (Requires ELEVENLABS_API_KEY in secrets)*")
-
-st.markdown("---")
-
-# ---------------------------------------------------------
-# HIDDEN ENGINE ROOM (ADVANCED SETTINGS)
-# ---------------------------------------------------------
-with st.expander("⚙️ Advanced Engine Settings (Optional)"):
-    st.caption("By default, the assistant uses the fastest and most cost-effective settings.")
-    cfg_col1, cfg_col2 = st.columns(2)
-    with cfg_col1:
-        brain_options = {"Gemini 3.1 Flash Lite (Fastest / Cheapest)": "gemini-3.1-flash-lite-preview", "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview"}
-        selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()), index=0)
-        selected_brain = brain_options[selected_brain_label]
-
-    with cfg_col2:
-        tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Market Data", "Deep Research"], index=0)
-
-st.markdown("---")
+# --- MOBILE-OPTIMIZED TABS ---
+tab1, tab2, tab3 = st.tabs(["🔍 Research", "📚 Library", "🧮 Valuation"])
 
 # ==============================================================================
-# --- 6. THE BACKGROUND WORKER (THE ROUTING ENGINE) ---
+# --- TAB 1: GENERATE NEW RESEARCH ---
 # ==============================================================================
-def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run, gen_audio):
-    update_task_progress(email, 0.05, "Initializing and resolving missing data...")
-    client = genai.Client(api_key=api_key)
-    reports = {}
+with tab1:
+    st.markdown("### Step 1: Target Information")
 
-    resolved_ticker = ticker.strip().upper()
-    resolved_company = company.strip()
-    resolved_ceo = ceo.strip()
-
-    if resolved_company and not resolved_ticker:
-        try:
-            prompt = f"What is the official stock ticker symbol for '{resolved_company}'? Return ONLY the symbol. If private, reply PRIVATE."
-            res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
-            ans = res.text.strip().replace("$", "").upper()
-            if "PRIVATE" not in ans and len(ans) <= 10: resolved_ticker = ans
-        except Exception: pass
-
-    if resolved_ticker:
-        try:
-            stock = yf.Ticker(resolved_ticker); info = stock.info
-            if not resolved_company: resolved_company = info.get("longName", resolved_ticker)
-            if not resolved_ceo:
-                for officer in info.get("companyOfficers", []):
-                    title = str(officer.get("title", "")).upper()
-                    if "CEO" in title or "CHIEF EXECUTIVE" in title:
-                        resolved_ceo = officer.get("name"); break
-        except Exception: pass
-
-    if not resolved_company: resolved_company = resolved_ticker if resolved_ticker else "the company"
-    if not resolved_ticker: resolved_ticker = resolved_company
-    if not resolved_ceo: resolved_ceo = "the CEO"
-
-    yf_context = ""
-    if tool_id in ("Market Data", "Yahoo Finance Data"):
-        update_task_progress(email, 0.15, f"Collecting Market data for {resolved_ticker}...")
-        try:
-            stock = yf.Ticker(resolved_ticker); info = stock.info
-            yf_context = f"BUSINESS SUMMARY:\n{info.get('longBusinessSummary', 'N/A')}\n\nFINANCIALS:\n{stock.financials.head(15).to_string()}\n"
-        except Exception as e: yf_context = f"Could not fetch Market data: {e}"
-
-    def fire_agent(agent_name, raw_instruction, extra_context=""):
-        instruction = (raw_instruction
-            .replace("[STOCK NAME]", resolved_company)
-            .replace("[TICKER]", resolved_ticker)
-            .replace("[Company_name]", resolved_company)
-            .replace("[company_name]", resolved_company)
-            .replace("[Company Name]", resolved_company)
-            .replace("{Company_Name}", resolved_company)
-            .replace("{{Company Name}}", resolved_company)
-            .replace("[COMPANY]", resolved_company)
-            .replace("{{CEO Name}}", resolved_ceo)
-            .replace("[INSERT INDUSTRY]", industry)
-            .replace("[INSERT INDUSTRY NAME]", industry)
-            .replace("[Industry Name]", industry)
-            .replace("[Insert Industry Name]", industry)
-            .replace("[Insert stock]", resolved_ticker)
-            .replace("{CONCEPT NAME}", concept)
-        )
-        instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report."
-
-        try:
-            if extra_context and agent_name in dependent_agents:
-                prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
-                res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt, config=types.GenerateContentConfig(temperature=0.1))
-                return agent_name, res.text
-
-            if tool_id == "Deep Research":
-                interaction = client.interactions.create(agent="deep-research-pro-preview-12-2025", input=instruction, background=True)
-                while True:
-                    interaction = client.interactions.get(interaction.id)
-                    if interaction.status == "completed": return agent_name, interaction.outputs[-1].text
-                    if interaction.status == "failed": return agent_name, f"Deep Research Error: {interaction.error}"
-                    time.sleep(15)
-            elif tool_id in ("Market Data", "Yahoo Finance Data"):
-                prompt = f"{instruction}\n\nMARKET DATA CONTEXT:\n{yf_context}"
-                res = client.models.generate_content(model=brain_id, contents=prompt)
-                return agent_name, res.text
-            else:
-                res = client.models.generate_content(model=brain_id, contents=instruction, config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
-                return agent_name, res.text
-        except Exception as e: return agent_name, f"Error: {e}"
-
-    base_prompts_to_run = set([p for p in prompts_to_run if p not in dependent_agents])
-    dep_prompts_to_run = [p for p in prompts_to_run if p in dependent_agents]
-    if dep_prompts_to_run: base_prompts_to_run.update(stock_base_agents)
-
-    total_base = len(base_prompts_to_run)
-    total_dep = len(dep_prompts_to_run)
-    completed_steps = 0
-    total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 3) 
-
-    if base_prompts_to_run:
-        update_task_progress(email, 0.28, "Stage 1: Gathering research data...")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name]): name for name in base_prompts_to_run}
-            for future in concurrent.futures.as_completed(future_to_agent):
-                name, text = future.result()
-                if text: reports[name] = text
-                completed_steps += 1
-                pct = 0.28 + (completed_steps / total_steps) * 0.45
-                update_task_progress(email, pct, f"Completed {completed_steps} of {total_base + total_dep} report tasks...")
-
-    if dep_prompts_to_run:
-        update_task_progress(email, 0.75, "Stage 2: Synthesizing final thesis...")
-        aggregated_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in reports.items() if "Skipped" not in v and "Error" not in v and k in stock_base_agents])
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name], aggregated_context): name for name in dep_prompts_to_run}
-            for future in concurrent.futures.as_completed(future_to_agent):
-                name, text = future.result()
-                if text: reports[name] = text
-                completed_steps += 1
-                pct = 0.75 + min(0.05, (completed_steps / total_steps) * 0.05)
-                update_task_progress(email, pct, f"Synthesizing final outputs ({completed_steps}/{total_base + total_dep})...")
-
-    final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
-    global_tasks[email]["reports"] = final_user_reports
-
-    # --- JSON DOSSIER EXTRACTION (FIXED TO PREVENT SYNTAX CRASHES) ---
-    update_task_progress(email, 0.82, "Updating Permanent Research Library (Dossier)...")
-    try:
-        dossier_context = "\n".join([f"==={k}===\n{v}" for k, v in final_user_reports.items()])
-        dossier_prompt = f"""You are a Master Portfolio Manager building a permanent dossier for {resolved_company} ({resolved_ticker}).
-        Based ONLY on the research below, extract and summarize the core elements into a strict JSON format. 
-        You must return ONLY a JSON object with these exact keys: "business_summary", "moat_notes", "management_notes", "key_metrics", "thesis", "anti_thesis", "valuation_assumptions", "watchlist_triggers".
-        If information is missing for a key, populate it with "Data not generated in this run."
+    with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", expanded=False):
+        st.markdown("Click below to search X, Yahoo Finance, and Google for today's top moving stocks.")
+        if st.button("🔍 Fetch Live Trending Data"):
+            with st.spinner("Searching the web for live market trends..."):
+                st.session_state.market_pulse_data = fetch_trending_market_pulse(st.secrets["GOOGLE_API_KEY"])
         
-        RESEARCH DATA:
-        {dossier_context}"""
-        
-        dos_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=dossier_prompt)
-        
-        # Safe extraction: Uses .replace() to strip markdown blocks cleanly without causing code cut-offs
-        raw_json = dos_res.text.strip()
-        raw_json = raw_json.replace("```json", "").replace("```", "").strip()
-            
-        parsed_dossier = json.loads(raw_json)
-        save_dossier(email, resolved_ticker, parsed_dossier)
-    except Exception as e:
-        print(f"Dossier generation skipped/failed: {e}")
+        if st.session_state.market_pulse_data:
+            st.markdown("---")
+            st.markdown(st.session_state.market_pulse_data)
+            st.markdown("---")
 
-    update_task_progress(email, 0.86, "Generating Visual Executive Summary...")
-    try:
-        summary_context = "\n".join([f"{k}: {v}" for k, v in final_user_reports.items()])
-        exec_prompt = f"""You are a Senior Analyst. Based ONLY on the following generated research for {resolved_company}, provide a fast executive summary for the user interface.
+    st.markdown("**Not sure where to start? Load a trending stock:**")
+
+    with st.spinner("Scanning X & Yahoo Finance for live trends..."):
+        if "GOOGLE_API_KEY" in st.secrets:
+            trending_tickers = get_live_trending_tickers(st.secrets["GOOGLE_API_KEY"])
+        else:
+            trending_tickers = ["NVDA", "PLTR", "TSLA", "AAPL", "MSFT"] 
+
+    cols = st.columns(len(trending_tickers))
+    for idx, ticker in enumerate(trending_tickers):
+        if cols[idx].button(f"🔥 Load {ticker}"):
+            st.session_state.ticker_input = ticker
+            fetch_info_from_ticker() 
+            st.rerun()
+
+    st.write("") 
+
+    user_email = st.text_input("📧 Enter your email to receive the final report ZIP and access your Library:")
+    user_email_clean = user_email.strip().lower()
+
+    is_super_user = user_email_clean in SUPER_USERS
+    if user_email_clean and "@" in user_email_clean:
+        if is_super_user: st.success("🌟 Super User Access: Unlimited Reports Available")
+        else:
+            p_runs, p_reps, s_reps = get_usage(user_email_clean)
+            st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
+            q1, q2, q3 = st.columns(3)
+            q1.metric("Premium Runs", f"{max(0, 4 - p_runs)} / 4")
+            q2.metric("Premium Reports", f"{max(0, 6 - p_reps)} / 6")
+            q3.metric("Standard Reports", f"{max(0, 30 - s_reps)} / 30")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        target_company = st.text_input("Company Name (e.g., Tesla):", key="company_input")
+        target_ticker = st.text_input("Ticker Symbol (e.g., TSLA):", key="ticker_input", on_change=fetch_info_from_ticker)
+        target_concept = st.text_input("Financial Concept to Explain (Optional, e.g., ROIC):", key="concept_input")
+    with col2:
+        target_industry = st.text_input("Industry (e.g., Electric Vehicles):", key="industry_input")
+        target_ceo = st.text_input("CEO's Name (Optional):", key="ceo_input")
+
+    st.markdown("---")
+
+    st.markdown("### Step 2: Select Reports & Features")
+    st.info("You can select multiple reports at once.")
+    selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=[], placeholder="No reports selected yet...")
+
+    if "ELEVENLABS_API_KEY" in st.secrets:
+        generate_audio = st.checkbox("🎧 Generate an AI Co-Host Audio Podcast (.mp3)", help="Powered by ElevenLabs.")
+    else:
+        generate_audio = False
+        st.caption("🎧 *Premium Audio Podcast feature disabled*")
+
+    st.markdown("---")
+
+    with st.expander("⚙️ Advanced Engine Settings (Optional)"):
+        st.caption("By default, the assistant uses the fastest and most cost-effective settings.")
+        cfg_col1, cfg_col2 = st.columns(2)
+        with cfg_col1:
+            brain_options = {"Gemini 3.1 Flash Lite (Fastest / Cheapest)": "gemini-3.1-flash-lite-preview", "Gemini 3.1 Pro (High Reasoning)": "gemini-3.1-pro-preview"}
+            selected_brain_label = st.radio("🧠 Model Engine:", list(brain_options.keys()), index=0)
+            selected_brain = brain_options[selected_brain_label]
+
+        with cfg_col2:
+            tool_choice = st.radio("🔎 Grounding Method:", ["Standard Google Search", "Market Data", "Deep Research"], index=0)
+
+    st.markdown("---")
+
+    def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run, gen_audio):
+        update_task_progress(email, 0.05, "Initializing and resolving missing data...")
+        client = genai.Client(api_key=api_key)
+        reports = {}
+
+        resolved_ticker = ticker.strip().upper()
+        resolved_company = company.strip()
+        resolved_ceo = ceo.strip()
+
+        if resolved_company and not resolved_ticker:
+            try:
+                prompt = f"What is the official stock ticker symbol for '{resolved_company}'? Return ONLY the symbol. If private, reply PRIVATE."
+                res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
+                ans = res.text.strip().replace("$", "").upper()
+                if "PRIVATE" not in ans and len(ans) <= 10: resolved_ticker = ans
+            except Exception: pass
+
+        if resolved_ticker:
+            try:
+                stock = yf.Ticker(resolved_ticker); info = stock.info
+                if not resolved_company: resolved_company = info.get("longName", resolved_ticker)
+                if not resolved_ceo:
+                    for officer in info.get("companyOfficers", []):
+                        title = str(officer.get("title", "")).upper()
+                        if "CEO" in title or "CHIEF EXECUTIVE" in title:
+                            resolved_ceo = officer.get("name"); break
+            except Exception: pass
+
+        if not resolved_company: resolved_company = resolved_ticker if resolved_ticker else "the company"
+        if not resolved_ticker: resolved_ticker = resolved_company
+        if not resolved_ceo: resolved_ceo = "the CEO"
+
+        yf_context = ""
+        if tool_id in ("Market Data", "Yahoo Finance Data"):
+            update_task_progress(email, 0.15, f"Collecting Market data for {resolved_ticker}...")
+            try:
+                stock = yf.Ticker(resolved_ticker); info = stock.info
+                yf_context = f"BUSINESS SUMMARY:\n{info.get('longBusinessSummary', 'N/A')}\n\nFINANCIALS:\n{stock.financials.head(15).to_string()}\n"
+            except Exception as e: yf_context = f"Could not fetch Market data: {e}"
+
+        def fire_agent(agent_name, raw_instruction, extra_context=""):
+            instruction = (raw_instruction
+                .replace("[STOCK NAME]", resolved_company)
+                .replace("[TICKER]", resolved_ticker)
+                .replace("[Company_name]", resolved_company)
+                .replace("[company_name]", resolved_company)
+                .replace("[Company Name]", resolved_company)
+                .replace("{Company_Name}", resolved_company)
+                .replace("{{Company Name}}", resolved_company)
+                .replace("[COMPANY]", resolved_company)
+                .replace("{{CEO Name}}", resolved_ceo)
+                .replace("[INSERT INDUSTRY]", industry)
+                .replace("[INSERT INDUSTRY NAME]", industry)
+                .replace("[Industry Name]", industry)
+                .replace("[Insert Industry Name]", industry)
+                .replace("[Insert stock]", resolved_ticker)
+                .replace("{CONCEPT NAME}", concept)
+            )
+            instruction += "\n\nCRITICAL INSTRUCTION: Be absolutely exhaustive, highly analytical, and highly descriptive. Do not write high-level summaries. Dive deep into raw data, explicitly cite metrics, and write at least 1,500 to 2,500 words for this specific report."
+
+            try:
+                if extra_context and agent_name in dependent_agents:
+                    prompt = f"YOU ARE A SYNTHESIS AGENT. USE THE RESEARCH BELOW:\n\n{instruction}\n\nRESEARCH DATA:\n{extra_context}"
+                    res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt, config=types.GenerateContentConfig(temperature=0.1))
+                    return agent_name, res.text
+
+                if tool_id == "Deep Research":
+                    interaction = client.interactions.create(agent="deep-research-pro-preview-12-2025", input=instruction, background=True)
+                    while True:
+                        interaction = client.interactions.get(interaction.id)
+                        if interaction.status == "completed": return agent_name, interaction.outputs[-1].text
+                        if interaction.status == "failed": return agent_name, f"Deep Research Error: {interaction.error}"
+                        time.sleep(15)
+                elif tool_id in ("Market Data", "Yahoo Finance Data"):
+                    prompt = f"{instruction}\n\nMARKET DATA CONTEXT:\n{yf_context}"
+                    res = client.models.generate_content(model=brain_id, contents=prompt)
+                    return agent_name, res.text
+                else:
+                    res = client.models.generate_content(model=brain_id, contents=instruction, config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
+                    return agent_name, res.text
+            except Exception as e: return agent_name, f"Error: {e}"
+
+        base_prompts_to_run = set([p for p in prompts_to_run if p not in dependent_agents])
+        dep_prompts_to_run = [p for p in prompts_to_run if p in dependent_agents]
+        if dep_prompts_to_run: base_prompts_to_run.update(stock_base_agents)
+
+        total_base = len(base_prompts_to_run)
+        total_dep = len(dep_prompts_to_run)
+        completed_steps = 0
+        total_steps = max(1, total_base + total_dep + (1 if gen_audio else 0) + 3)
+
+        if base_prompts_to_run:
+            update_task_progress(email, 0.28, "Stage 1: Gathering research data...")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+                future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name]): name for name in base_prompts_to_run}
+                for future in concurrent.futures.as_completed(future_to_agent):
+                    name, text = future.result()
+                    if text: reports[name] = text
+                    completed_steps += 1
+                    pct = 0.28 + (completed_steps / total_steps) * 0.45
+                    update_task_progress(email, pct, f"Completed {completed_steps} of {total_base + total_dep} report tasks...")
+
+        if dep_prompts_to_run:
+            update_task_progress(email, 0.75, "Stage 2: Synthesizing final thesis...")
+            aggregated_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in reports.items() if "Skipped" not in v and "Error" not in v and k in stock_base_agents])
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_to_agent = {executor.submit(fire_agent, name, gem_prompts[name], aggregated_context): name for name in dep_prompts_to_run}
+                for future in concurrent.futures.as_completed(future_to_agent):
+                    name, text = future.result()
+                    if text: reports[name] = text
+                    completed_steps += 1
+                    pct = 0.75 + min(0.05, (completed_steps / total_steps) * 0.05)
+                    update_task_progress(email, pct, f"Synthesizing final outputs ({completed_steps}/{total_base + total_dep})...")
+
+        final_user_reports = {k: v for k, v in reports.items() if k in prompts_to_run}
+        global_tasks[email]["reports"] = final_user_reports
+
+        is_stock_research = any(p in stock_base_agents + dependent_agents for p in prompts_to_run)
+        parsed_scorecard = {}
+
+        if is_stock_research:
+            update_task_progress(email, 0.80, "Updating Permanent Research Library (Dossier)...")
+            try:
+                dossier_context = "\n".join([f"==={k}===\n{v}" for k, v in final_user_reports.items()])
+                dossier_prompt = f"""You are a Master Portfolio Manager building a permanent dossier for {resolved_company} ({resolved_ticker}).
+                Based ONLY on the research below, extract and summarize the core elements into a strict JSON format. 
+                You must return ONLY a JSON object with these exact keys: "business_summary", "moat_notes", "management_notes", "key_metrics", "thesis", "anti_thesis", "valuation_assumptions", "watchlist_triggers".
+                If information is missing for a key, populate it with "Data not generated in this run."
+                
+                RESEARCH DATA:
+                {dossier_context}"""
+                
+                dos_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=dossier_prompt)
+                raw_json = dos_res.text.strip().replace("```json", "").replace("```", "").strip()
+                parsed_dossier = json.loads(raw_json)
+            except Exception as e:
+                print(f"Dossier generation skipped/failed: {e}")
+                parsed_dossier = {}
+
+            update_task_progress(email, 0.83, "Calculating Transparent Scorecard...")
+            try:
+                scorecard_prompt = f"""You are a Master Portfolio Manager. Based ONLY on the generated research for {resolved_company}, create a transparent, quantitative scorecard.
+                Evaluate the company across these 7 categories: "Business Quality", "Capital Allocation", "Balance Sheet", "Valuation", "Growth Durability", "Management Alignment", "Macro Resilience".
+                
+                You must return ONLY a strict JSON object where each category is a key. Inside each category, provide:
+                - "score": A number out of 10.
+                - "why": A 1-sentence rationale.
+                - "metrics": The specific metric evaluated (e.g., ROIC, Debt/EBITDA).
+                - "confidence": "Low", "Medium", or "High".
+                
+                Example Format:
+                {{ "Business Quality": {{"score": 8, "why": "Strong moat.", "metrics": "Gross Margin", "confidence": "High"}} }}
+                
+                RESEARCH DATA:
+                {dossier_context}
+                """
+                score_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=scorecard_prompt)
+                raw_score = score_res.text.strip().replace("```json", "").replace("```", "").strip()
+                parsed_scorecard = json.loads(raw_score)
+                global_tasks[email]["scorecard"] = parsed_scorecard
+            except Exception as e:
+                print(f"Scorecard generation failed: {e}")
+                global_tasks[email]["scorecard"] = None
+
+            if parsed_dossier:
+                save_dossier(email, resolved_ticker, parsed_dossier, parsed_scorecard)
+
+            update_task_progress(email, 0.86, "Generating Visual Executive Summary...")
+            try:
+                exec_prompt = f"""You are a Senior Analyst. Based ONLY on the following generated research for {resolved_company}, provide a fast executive summary for the user interface.
 FORMAT EXACTLY LIKE THIS:
 ### 🚦 Final Verdict: [🟢 BUY, 🟡 HOLD, or 🔴 SELL]
 **Key Takeaways:**
@@ -829,222 +846,382 @@ FORMAT EXACTLY LIKE THIS:
 - [High impact insight 3]
 
 RESEARCH DATA:
-{summary_context}"""
-        exec_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=exec_prompt)
-        global_tasks[email]["exec_summary"] = exec_res.text.strip()
-    except Exception:
-        global_tasks[email]["exec_summary"] = None
+{dossier_context}"""
+                exec_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=exec_prompt)
+                global_tasks[email]["exec_summary"] = exec_res.text.strip()
+            except Exception:
+                global_tasks[email]["exec_summary"] = None
 
-    audio_bytes = None
-    if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
-        update_task_progress(email, 0.89, "Stage 3: Writing Co-Host Podcast Script...")
-        try:
-            if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"]
-            elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"]
-            elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"]
-            else: active_persona = PODCAST_PROMPTS["Concept"]
-
-            pod_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in final_user_reports.items()])
-            pod_instr = (active_persona.replace("[Company_name]", resolved_company).replace("[Industry Name]", industry).replace("{{CEO Name}}", resolved_ceo).replace("{CONCEPT NAME}", concept))
-            
-            res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\nDATA:\n{pod_context}")
-            script_text = res.text.strip()
-            
-            update_task_progress(email, 0.92, "Stage 4: Generating ElevenLabs Premium Audio...")
-            voice_host_a = "29vD33N1CtxCmqQRPOHJ" # Drew (Male)
-            voice_host_b = "21m00Tcm4TlvDq8ikWAM" # Rachel (Female)
-            api_key_11 = st.secrets["ELEVENLABS_API_KEY"]
-            
-            stitched_audio = b""
-            lines = script_text.split('\n')
-            for line in lines:
-                line = line.strip()
-                if not line: continue
-                
-                target_voice = voice_host_a
-                speak_text = line
-                
-                if line.startswith("[Host A]:"):
-                    target_voice = voice_host_a
-                    speak_text = line.replace("[Host A]:", "").strip()
-                elif line.startswith("[Host B]:"):
-                    target_voice = voice_host_b
-                    speak_text = line.replace("[Host B]:", "").strip()
-                
-                if speak_text:
-                    audio_chunk = generate_elevenlabs_audio(speak_text, target_voice, api_key_11)
-                    stitched_audio += audio_chunk
-
-            if stitched_audio:
-                audio_bytes = stitched_audio
-                global_tasks[email]["audio_data"] = audio_bytes
-        except Exception as e:
-            global_tasks[email]["audio_error"] = str(e)
-            global_tasks[email]["audio_data"] = None
-
-    update_task_progress(email, 0.95, "Compiling ZIP package...")
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for name, text in final_user_reports.items():
-            safe_name = name.replace(" ", "_").replace("/", "-")
-            html_content = markdown.markdown(text, extensions=["tables"])
-            doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
-            zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
-        if audio_bytes:
-            zip_file.writestr(f"{resolved_ticker}_Premium_Podcast.mp3", audio_bytes)
-            
-    global_tasks[email]["zip_data"] = zip_buffer.getvalue()
-
-    warning_msg = ""
-    if not (email in SUPER_USERS):
-        p_runs, p_reps, s_reps = get_usage(email)
-        if is_premium_run and (p_runs >= 4 or p_reps >= 6):
-            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features for the next 48 hours."
-        elif not is_premium_run and s_reps >= 30:
-            warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features for the next 48 hours."
-
-    try:
-        update_task_progress(email, 0.98, "Sending final email delivery...")
-        msg = MIMEMultipart()
-        msg["From"] = f"B.E Research <{email_sender}>"; msg["To"] = email; msg["Subject"] = f"🚀 Analysis Complete: {resolved_company}"
-        body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
-        msg.attach(MIMEText(body, "plain"))
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(zip_buffer.getvalue()); encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename={resolved_ticker}_BEResearch_Reports.zip")
-        msg.attach(part)
-        server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls(); server.login(email_sender, email_pwd); server.send_message(msg); server.quit()
-    except Exception: pass
-
-    update_task_progress(email, 1.0, "Completed.")
-    global_tasks[email]["status"] = "complete"
-
-# ==============================================================================
-# --- 7. RUN BUTTON & VALIDATION GATEKEEPER ---
-# ==============================================================================
-if st.button("🚀 Generate B.E Research Report", use_container_width=True):
-    if not user_email or "@" not in user_email: st.error("Please enter a valid email address at the top."); st.stop()
-    if not selected_prompts: st.error("Please select at least one report to generate."); st.stop()
-
-    needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
-    needs_industry = any(p in industry_agents for p in selected_prompts)
-    needs_ceo = any(p in ceo_agents for p in selected_prompts)
-    needs_concept = any(p in concept_agents for p in selected_prompts)
-
-    missing_fields = []
-    if needs_stock and not (target_company.strip() or target_ticker.strip()): missing_fields.append("**Company Name** OR **Ticker Symbol**")
-    if needs_industry and not target_industry.strip(): missing_fields.append("**Industry Sector**")
-    if needs_ceo and not target_ceo.strip(): missing_fields.append("**CEO's Name**")
-    if needs_concept and not target_concept.strip(): missing_fields.append("**Financial Concept**")
-
-    if missing_fields:
-        st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
-        st.stop()
-
-    is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
-    num_requested = len(selected_prompts)
-
-    if not is_super_user:
-        p_runs, p_reps, s_reps = get_usage(user_email_clean)
-        if is_premium_request:
-            if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs for the last 48 hours."); st.stop()
-            if p_reps + num_requested > 6: st.error(f"🛑 You requested {num_requested} Premium reports, but only have {max(0, 6 - p_reps)} remaining for the next 48 hours."); st.stop()
         else:
-            if s_reps + num_requested > 30: st.error(f"🛑 You requested {num_requested} Standard reports, but only have {max(0, 30 - s_reps)} remaining for the next 48 hours."); st.stop()
+            global_tasks[email]["exec_summary"] = None
+            global_tasks[email]["scorecard"] = None
 
-    log_usage(user_email_clean, is_premium_request, num_requested)
-    safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
-    save_lead(user_email_clean, safe_ticker)
+        audio_bytes = None
+        if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
+            update_task_progress(email, 0.89, "Stage 3: Writing Co-Host Podcast Script...")
+            try:
+                if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"]
+                elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"]
+                elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"]
+                else: active_persona = PODCAST_PROMPTS["Concept"]
 
-    base_time = 45 + (num_requested * (120 if tool_choice == "Deep Research" else 20))
-    if generate_audio: base_time += 60 
+                pod_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in final_user_reports.items()])
+                pod_instr = (active_persona.replace("[Company_name]", resolved_company).replace("[Industry Name]", industry).replace("{{CEO Name}}", resolved_ceo).replace("{CONCEPT NAME}", concept))
+                
+                res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\nDATA:\n{pod_context}")
+                script_text = res.text.strip()
+                
+                update_task_progress(email, 0.92, "Stage 4: Generating ElevenLabs Premium Audio...")
+                voice_host_a = "29vD33N1CtxCmqQRPOHJ" 
+                voice_host_b = "21m00Tcm4TlvDq8ikWAM" 
+                api_key_11 = st.secrets["ELEVENLABS_API_KEY"]
+                
+                stitched_audio = b""
+                lines = script_text.split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line: continue
+                    
+                    target_voice = voice_host_a
+                    speak_text = line
+                    if line.startswith("[Host A]:"): target_voice = voice_host_a; speak_text = line.replace("[Host A]:", "").strip()
+                    elif line.startswith("[Host B]:"): target_voice = voice_host_b; speak_text = line.replace("[Host B]:", "").strip()
+                    
+                    if speak_text:
+                        audio_chunk = generate_elevenlabs_audio(speak_text, target_voice, api_key_11)
+                        stitched_audio += audio_chunk
 
-    global_tasks[user_email_clean] = {
-        "status": "running", "progress": "Starting...", "progress_pct": 0.02,
-        "reports": {}, "zip_data": None, "audio_data": None, "audio_error": None, "exec_summary": None,
-        "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
-    }
+                if stitched_audio:
+                    audio_bytes = stitched_audio
+                    global_tasks[email]["audio_data"] = audio_bytes
+            except Exception as e:
+                global_tasks[email]["audio_error"] = str(e)
+                global_tasks[email]["audio_data"] = None
 
-    background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
+        update_task_progress(email, 0.95, "Compiling ZIP package...")
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            for name, text in final_user_reports.items():
+                safe_name = name.replace(" ", "_").replace("/", "-")
+                html_content = markdown.markdown(text, extensions=["tables"])
+                doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
+                zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
+            if audio_bytes:
+                zip_file.writestr(f"{resolved_ticker}_Premium_Podcast.mp3", audio_bytes)
+                
+        global_tasks[email]["zip_data"] = zip_buffer.getvalue()
+
+        warning_msg = ""
+        if not (email in SUPER_USERS):
+            p_runs, p_reps, s_reps = get_usage(email)
+            if is_premium_run and (p_runs >= 4 or p_reps >= 6):
+                warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Premium features for the next 48 hours."
+            elif not is_premium_run and s_reps >= 30:
+                warning_msg = "\n\n⚠️ NOTE: You have exhausted your maximum limit for Standard features for the next 48 hours."
+
+        try:
+            update_task_progress(email, 0.98, "Sending final email delivery...")
+            msg = MIMEMultipart()
+            msg["From"] = f"B.E Research <{email_sender}>"; msg["To"] = email; msg["Subject"] = f"🚀 Analysis Complete: {resolved_company}"
+            body = f"Your specific requested research for {resolved_company} is attached.{warning_msg}"
+            msg.attach(MIMEText(body, "plain"))
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(zip_buffer.getvalue()); encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f"attachment; filename={resolved_ticker}_BEResearch_Reports.zip")
+            msg.attach(part)
+            server = smtplib.SMTP("smtp.gmail.com", 587); server.starttls(); server.login(email_sender, email_pwd); server.send_message(msg); server.quit()
+        except Exception: pass
+
+        update_task_progress(email, 1.0, "Completed.")
+        global_tasks[email]["status"] = "complete"
+
+    if st.button("🚀 Generate B.E Research Report", use_container_width=True):
+        if not user_email or "@" not in user_email: st.error("Please enter a valid email address at the top."); st.stop()
+        if not selected_prompts: st.error("Please select at least one report to generate."); st.stop()
+
+        needs_stock = any(p in stock_base_agents + dependent_agents for p in selected_prompts)
+        needs_industry = any(p in industry_agents for p in selected_prompts)
+        needs_ceo = any(p in ceo_agents for p in selected_prompts)
+        needs_concept = any(p in concept_agents for p in selected_prompts)
+
+        missing_fields = []
+        if needs_stock and not (target_company.strip() or target_ticker.strip()): missing_fields.append("**Company Name** OR **Ticker Symbol**")
+        if needs_industry and not target_industry.strip(): missing_fields.append("**Industry Sector**")
+        if needs_ceo and not target_ceo.strip(): missing_fields.append("**CEO's Name**")
+        if needs_concept and not target_concept.strip(): missing_fields.append("**Financial Concept**")
+
+        if missing_fields:
+            st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
+            st.stop()
+
+        is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
+        num_requested = len(selected_prompts)
+
+        if not is_super_user:
+            p_runs, p_reps, s_reps = get_usage(user_email_clean)
+            if is_premium_request:
+                if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs for the last 48 hours."); st.stop()
+                if p_reps + num_requested > 6: st.error(f"🛑 You requested {num_requested} Premium reports, but only have {max(0, 6 - p_reps)} remaining for the next 48 hours."); st.stop()
+            else:
+                if s_reps + num_requested > 30: st.error(f"🛑 You requested {num_requested} Standard reports, but only have {max(0, 30 - s_reps)} remaining for the next 48 hours."); st.stop()
+
+        log_usage(user_email_clean, is_premium_request, num_requested)
+        safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
+        save_lead(user_email_clean, safe_ticker)
+
+        base_time = 45 + (num_requested * (120 if tool_choice == "Deep Research" else 20))
+        if generate_audio: base_time += 60 
+
+        global_tasks[user_email_clean] = {
+            "status": "running", "progress": "Starting...", "progress_pct": 0.02,
+            "reports": {}, "zip_data": None, "audio_data": None, "audio_error": None, "exec_summary": None,
+            "scorecard": None,
+            "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
+        }
+
+        background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
+
+    if user_email_clean in global_tasks:
+        task = global_tasks[user_email_clean]
+
+        if task["status"] == "running":
+            elapsed = time.time() - task.get("start_time", time.time())
+            est_rem = max(0, task.get("estimated_total_seconds", 60) - elapsed)
+            
+            time_based_floor = min(0.95, elapsed / task.get("estimated_total_seconds", 60))
+            visual_progress = max(task.get("progress_pct", 0.0), time_based_floor * 0.85)
+
+            st.info(f"⏳ **Running:** {task['progress']}")
+            st.progress(visual_progress)
+            st.caption(f"Estimated delivery time remaining: **{format_eta(est_rem)}**")
+            time.sleep(2); st.rerun()
+
+        elif task["status"] == "complete":
+            st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
+
+            if task.get("exec_summary"):
+                with st.container():
+                    st.markdown("---")
+                    st.markdown(task["exec_summary"])
+                    st.markdown("---")
+                    
+            if task.get("scorecard"):
+                display_ui_scorecard(task["scorecard"])
+
+            if task.get("audio_data"):
+                st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
+                st.audio(task["audio_data"], format="audio/mp3")
+            elif task.get("audio_error"):
+                st.warning(f"⚠️ **Audio Generation Failed:** {task['audio_error']}")
+                st.caption("Your text reports and ZIP file were still generated successfully.")
+
+            if task.get("zip_data"):
+                st.download_button(label="📥 Direct Download: Research ZIP Package", data=task["zip_data"], file_name=f"{task['ticker']}_BEResearch.zip", mime="application/zip", use_container_width=True)
+
+            st.header("📑 Your Reports")
+            for name, text in task["reports"].items():
+                with st.expander(f"View Report: {name}"):
+                    st.markdown(text)
 
 # ==============================================================================
-# --- 8. UI STATE DISPLAY ---
+# --- TAB 2: MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
 # ==============================================================================
-if user_email_clean in global_tasks:
-    task = global_tasks[user_email_clean]
+with tab2:
+    st.markdown("### 📚 My Research Library (Permanent Dossiers & Scorecards)")
+    st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
 
-    if task["status"] == "running":
-        elapsed = time.time() - task.get("start_time", time.time())
-        est_rem = max(0, task.get("estimated_total_seconds", 60) - elapsed)
-        
-        time_based_floor = min(0.95, elapsed / task.get("estimated_total_seconds", 60))
-        visual_progress = max(task.get("progress_pct", 0.0), time_based_floor * 0.85)
-
-        st.info(f"⏳ **Running:** {task['progress']}")
-        st.progress(visual_progress)
-        st.caption(f"Estimated delivery time remaining: **{format_eta(est_rem)}**")
-        time.sleep(2); st.rerun()
-
-    elif task["status"] == "complete":
-        st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
-
-        if task.get("exec_summary"):
-            with st.container():
-                st.markdown("---")
-                st.markdown(task["exec_summary"])
-                st.markdown("---")
-
-        if task.get("audio_data"):
-            st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
-            st.audio(task["audio_data"], format="audio/mp3")
-        elif task.get("audio_error"):
-            st.warning(f"⚠️ **Audio Generation Failed:** {task['audio_error']}")
-            st.caption("Your text reports and ZIP file were still generated successfully.")
-
-        if task.get("zip_data"):
-            st.download_button(label="📥 Direct Download: Research ZIP Package", data=task["zip_data"], file_name=f"{task['ticker']}_BEResearch.zip", mime="application/zip", use_container_width=True)
-
-        st.header("📑 Your Reports")
-        for name, text in task["reports"].items():
-            with st.expander(f"View Report: {name}"):
-                st.markdown(text)
-
-# ==============================================================================
-# --- 9. MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
-# ==============================================================================
-st.markdown("---")
-st.markdown("### 📚 My Research Library (Permanent Dossiers)")
-st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
-
-if not user_email_clean or "@" not in user_email_clean:
-    st.warning("Please enter your email at the top of the page (in Step 1) to access your saved library.")
-else:
-    dossier_df = get_user_dossiers(user_email_clean)
-    
-    if dossier_df.empty:
-        st.info("Your library is currently empty. Run your first stock report above to build your first dossier!")
+    if not user_email_clean or "@" not in user_email_clean:
+        st.warning("Please enter your email on the 'Research' tab to access your saved library.")
     else:
-        saved_tickers = dossier_df['ticker'].unique().tolist()
-        selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
+        dossier_df = get_user_dossiers(user_email_clean)
         
-        dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
-        
-        st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
-        st.caption(f"Last Updated: {dossier_data['last_updated']}")
-        
-        with st.expander("📖 Business Summary", expanded=True):
-            st.markdown(dossier_data['business_summary'])
-        with st.expander("🏰 Moat Notes"):
-            st.markdown(dossier_data['moat_notes'])
-        with st.expander("👔 Management Notes"):
-            st.markdown(dossier_data['management_notes'])
-        with st.expander("📊 Key Metrics"):
-            st.markdown(dossier_data['key_metrics'])
-        with st.expander("🟢 Bull Thesis"):
-            st.markdown(dossier_data['thesis'])
-        with st.expander("🔴 Anti-Thesis (Risks)"):
-            st.markdown(dossier_data['anti_thesis'])
-        with st.expander("⚖️ Valuation Assumptions"):
-            st.markdown(dossier_data['valuation_assumptions'])
-        with st.expander("👀 Watchlist Triggers"):
-            st.markdown(dossier_data['watchlist_triggers'])
+        if dossier_df.empty:
+            st.info("Your library is currently empty. Run your first stock report to build your first dossier!")
+        else:
+            saved_tickers = dossier_df['ticker'].unique().tolist()
+            selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
+            
+            dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
+            
+            st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
+            st.caption(f"Last Updated: {dossier_data['last_updated']}")
+            
+            if "scorecard" in dossier_data and dossier_data["scorecard"] and dossier_data["scorecard"] != "{}":
+                try:
+                    saved_scorecard = json.loads(dossier_data["scorecard"])
+                    display_ui_scorecard(saved_scorecard)
+                except Exception: pass
+            
+            with st.expander("📖 Business Summary", expanded=True):
+                st.markdown(dossier_data['business_summary'])
+            with st.expander("🏰 Moat Notes"):
+                st.markdown(dossier_data['moat_notes'])
+            with st.expander("👔 Management Notes"):
+                st.markdown(dossier_data['management_notes'])
+            with st.expander("📊 Key Metrics"):
+                st.markdown(dossier_data['key_metrics'])
+            with st.expander("🟢 Bull Thesis"):
+                st.markdown(dossier_data['thesis'])
+            with st.expander("🔴 Anti-Thesis (Risks)"):
+                st.markdown(dossier_data['anti_thesis'])
+            with st.expander("⚖️ Valuation Assumptions"):
+                st.markdown(dossier_data['valuation_assumptions'])
+            with st.expander("👀 Watchlist Triggers"):
+                st.markdown(dossier_data['watchlist_triggers'])
+
+# ==============================================================================
+# --- 10. TAB 3: VALUATION WORKBENCH (THE QUANTITATIVE LAYER) ---
+# ==============================================================================
+with tab3:
+    st.header("🧮 Valuation Workbench")
+    st.markdown("Stress-test your thesis with hard math. Now upgraded with CAPM WACC, EV-to-Equity bridging, and sector-specific cash flow logic.")
+
+    val_ticker = st.text_input("Enter Ticker to Value (e.g., AAPL):", key="val_ticker").strip().upper()
+
+    if val_ticker:
+        with st.spinner(f"Fetching deep financial data for {val_ticker}..."):
+            try:
+                stock_val = yf.Ticker(val_ticker)
+                info_val = stock_val.info
+                
+                # 1. Base Metrics
+                current_price = info_val.get("currentPrice") or info_val.get("regularMarketPrice") or info_val.get("previousClose")
+                shares_out = info_val.get("sharesOutstanding")
+                eps_ttm = info_val.get("trailingEps", 0.0)
+                sector = info_val.get("sector", "")
+                
+                # 2. EV-to-Equity Bridge Metrics
+                total_cash = info_val.get("totalCash", 0.0)
+                total_debt = info_val.get("totalDebt", 0.0)
+                
+                # 3. Dynamic CAPM Discount Rate (WACC)
+                beta = info_val.get("beta", 1.0)
+                try:
+                    tnx = yf.Ticker("^TNX")
+                    risk_free_rate = tnx.info.get("regularMarketPrice", 4.2) / 100.0
+                except Exception:
+                    risk_free_rate = 0.042
+                
+                market_risk_premium = 0.055 # Standard 5.5% ERP
+                calculated_wacc = risk_free_rate + (beta * market_risk_premium)
+                
+                # 4. Sector-Smart Cash Flow Logic (The SOFI Fix)
+                if sector == "Financial Services":
+                    # Banks use Net Income, not FCF
+                    raw_cash_flow = info_val.get("netIncomeToCommon", 0.0)
+                    cf_label = "Net Income (Financial Sector Adjustment)"
+                else:
+                    # Standard companies use FCF
+                    try:
+                        cf = stock_val.cashflow
+                        op_cash = cf.loc['Operating Cash Flow'].iloc[0]
+                        capex = cf.loc['Capital Expenditure'].iloc[0]
+                        raw_cash_flow = op_cash + capex
+                    except Exception:
+                        raw_cash_flow = info_val.get("freeCashflow", 0.0)
+                    cf_label = "Free Cash Flow (GAAP)"
+                    
+                if current_price and shares_out:
+                    st.success(f"Data loaded for {info_val.get('shortName', val_ticker)} | Sector: {sector} | Current Price: ${current_price:.2f}")
+                    
+                    vc1, vc2 = st.columns([1, 1])
+                    
+                    with vc1:
+                        st.subheader("1. Discounted Cash Flow (DCF)")
+                        
+                        # Pre-fill with the dynamically selected cash flow
+                        fcf_input = st.number_input(f"Base {cf_label} ($ Billions)", value=float(raw_cash_flow / 1e9), step=1.0) * 1e9
+                        
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            g1_5 = st.number_input("Growth Rate (Years 1-5) %", value=15.0, step=1.0) / 100.0
+                            # Pre-fill with our custom calculated CAPM WACC
+                            discount_rate = st.number_input("Discount Rate (CAPM WACC) %", value=float(calculated_wacc * 100), step=0.5) / 100.0
+                        with col_b:
+                            g6_10 = st.number_input("Growth Rate (Years 6-10) %", value=10.0, step=1.0) / 100.0
+                            term_mult = st.number_input("Terminal Multiple (P/FCF)", value=15.0, step=1.0)
+                            
+                        def calculate_dcf(base_fcf, shares, r_g1, r_g2, disc, t_mult, cash, debt):
+                            cash_flows = []
+                            current_fcf = base_fcf
+                            for i in range(1, 6):
+                                current_fcf *= (1 + r_g1)
+                                cash_flows.append(current_fcf / ((1 + disc) ** i))
+                            for i in range(6, 11):
+                                current_fcf *= (1 + r_g2)
+                                cash_flows.append(current_fcf / ((1 + disc) ** i))
+                                
+                            terminal_value = (current_fcf * t_mult) / ((1 + disc) ** 10)
+                            enterprise_value = sum(cash_flows) + terminal_value
+                            
+                            # The EV-to-Equity Bridge
+                            equity_value = enterprise_value + cash - debt
+                            return equity_value / shares
+                            
+                        fair_value = calculate_dcf(fcf_input, shares_out, g1_5, g6_10, discount_rate, term_mult, total_cash, total_debt)
+                        margin_of_safety = ((fair_value - current_price) / current_price) * 100
+                        
+                        st.markdown(f"### Fair Value: **${fair_value:.2f}**")
+                        if margin_of_safety > 0:
+                            st.success(f"Undervalued by {margin_of_safety:.1f}%")
+                        else:
+                            st.error(f"Overvalued by {abs(margin_of_safety):.1f}%")
+                            
+                        # Sensitivity Matrix
+                        st.markdown("##### Valuation Sensitivity Matrix")
+                        rates = [discount_rate - 0.02, discount_rate, discount_rate + 0.02]
+                        growths = [g1_5 - 0.05, g1_5, g1_5 + 0.05]
+                        matrix = []
+                        for g in growths:
+                            row = []
+                            for r in rates:
+                                val = calculate_dcf(fcf_input, shares_out, g, g-(g1_5-g6_10), r, term_mult, total_cash, total_debt)
+                                row.append(f"${val:.2f}")
+                            matrix.append(row)
+                        sens_df = pd.DataFrame(matrix, columns=[f"WACC {r*100:.1f}%" for r in rates], index=[f"Growth {g*100:.1f}%" for g in growths])
+                        st.dataframe(sens_df, use_container_width=True)
+                        
+                    with vc2:
+                        st.subheader("2. Reverse DCF (Market Expectations)")
+                        low, high = -0.5, 1.0
+                        implied_g = 0.0
+                        for _ in range(50):
+                            mid = (low + high) / 2
+                            test_fv = calculate_dcf(fcf_input, shares_out, mid, mid, discount_rate, term_mult, total_cash, total_debt)
+                            if test_fv > current_price: high = mid
+                            else: low = mid
+                            implied_g = mid
+                        st.info(f"To justify its current price of **${current_price:.2f}**, {val_ticker} must grow cash flows at **{implied_g*100:.1f}% per year** for the next 10 years.")
+                        
+                        st.markdown("---")
+                        st.subheader("3. EPS × P/E Return Model")
+                        pe_c1, pe_c2 = st.columns(2)
+                        with pe_c1:
+                            eps_input = st.number_input("Current EPS", value=float(eps_ttm), step=0.5)
+                            eps_cagr = st.number_input("Expected EPS CAGR %", value=12.0, step=1.0) / 100.0
+                        with pe_c2:
+                            years_out = st.number_input("Years to Hold", value=5, step=1)
+                            target_pe = st.number_input("Target Exit P/E", value=20.0, step=1.0)
+                            
+                        future_eps = eps_input * ((1 + eps_cagr) ** years_out)
+                        future_price = future_eps * target_pe
+                        annualized_return = (((future_price / current_price) ** (1 / years_out)) - 1) * 100 if current_price > 0 else 0
+                        
+                        st.markdown(f"**Year {years_out} Projected Price:** ${future_price:.2f}")
+                        st.markdown(f"**Annualized Return (CAGR):** {annualized_return:.1f}%")
+                        
+                        st.markdown("---")
+                        st.subheader("4. Yield Comparison (Risk Premium)")
+                        market_cap = current_price * shares_out
+                        # Safely calculate yield to prevent dividing by zero
+                        fcf_yield = fcf_input / market_cap if market_cap > 0 else 0
+                        equity_risk_premium = fcf_yield - risk_free_rate
+                        
+                        y1, y2, y3 = st.columns(3)
+                        y1.metric("Cash Flow Yield", f"{fcf_yield*100:.2f}%")
+                        y2.metric("10-Yr Treasury", f"{risk_free_rate*100:.2f}%")
+                        y3.metric("Risk Premium", f"{equity_risk_premium*100:.2f}%")
+                else:
+                    st.error("Could not pull reliable financial data for this ticker.")
+            except Exception as e:
+                st.error(f"Error loading valuation data: {e}")
