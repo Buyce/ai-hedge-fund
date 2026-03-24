@@ -1006,15 +1006,6 @@ RESEARCH DATA:
         elif task["status"] == "complete":
             st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
 
-            if task.get("exec_summary"):
-                with st.container():
-                    st.markdown("---")
-                    st.markdown(task["exec_summary"])
-                    st.markdown("---")
-                    
-            if task.get("scorecard"):
-                display_ui_scorecard(task["scorecard"])
-
             if task.get("audio_data"):
                 st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
                 st.audio(task["audio_data"], format="audio/mp3")
@@ -1025,10 +1016,21 @@ RESEARCH DATA:
             if task.get("zip_data"):
                 st.download_button(label="📥 Direct Download: Research ZIP Package", data=task["zip_data"], file_name=f"{task['ticker']}_BEResearch.zip", mime="application/zip", use_container_width=True)
 
+            # 1. Show the Reports First
             st.header("📑 Your Reports")
             for name, text in task["reports"].items():
                 with st.expander(f"View Report: {name}"):
                     st.markdown(text)
+
+            # 2. Show the Final Verdict and Scorecard at the Bottom
+            if task.get("exec_summary"):
+                with st.container():
+                    st.markdown("---")
+                    st.markdown(task["exec_summary"])
+                    st.markdown("---")
+                    
+            if task.get("scorecard"):
+                display_ui_scorecard(task["scorecard"])
 
 # ==============================================================================
 # --- TAB 2: MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
