@@ -1076,57 +1076,116 @@ with tab3:
     st.header("🧮 Valuation Workbench")
     st.markdown("Stress-test your thesis. Upgraded with an Interactive Cash Flow Grid, True WACC, and EV-to-Equity bridging.")
 
-    # --- NEW: CACHED DATA FETCHER TO PREVENT RATE LIMITS ---
+    # --- THE INVINCIBLE DATA FETCHER ---
     @st.cache_data(ttl=3600, show_spinner=False)
-    def get_valuation_metrics(ticker):
-        """Fetches data once and caches it for 1 hour to prevent Yahoo Finance IP bans."""
-        stock_val = yf.Ticker(ticker)
-        info_val = stock_val.info
-        
-        metrics = {}
-        metrics["current_price"] = info_val.get("currentPrice") or info_val.get("regularMarketPrice") or info_val.get("previousClose")
-        metrics["shares_out"] = info_val.get("sharesOutstanding", 1.0)
-        metrics["eps_ttm"] = info_val.get("trailingEps", 0.0)
-        metrics["sector"] = info_val.get("sector", "")
-        metrics["total_cash"] = info_val.get("totalCash", 0.0)
-        metrics["total_debt"] = info_val.get("totalDebt", 0.0)
-        metrics["beta"] = info_val.get("beta", 1.0)
-        metrics["shortName"] = info_val.get("shortName", ticker)
-        
+    def get_valuation_metrics(ticker, api_key):
+        """Fetches data and caches it. Has a built-in AI fallback if Yahoo bans the IP."""
+        metrics = {"shortName": ticker}
         try:
-            tnx = yf.Ticker("^TNX")
-            metrics["risk_free_rate"] = tnx.info.get("regularMarketPrice", 4.2) / 100.0
-        except Exception:
-            metrics["risk_free_rate"] = 0.042
+            # ATTEMPT 1: Yahoo Finance
+            stock_val = yf.Ticker(ticker)
+            info_val = stock_val.info
             
-        if metrics["sector"] == "Financial Services":
-            metrics["raw_cash_flow"] = info_val.get("netIncomeToCommon", 0.0)
-            metrics["cf_label"] = "Net Income (Financial Sector)"
-        else:
-            try:
-                cf = stock_val.cashflow
-                op_cash = cf.loc['Operating Cash Flow'].iloc[0]
-                capex = cf.loc['Capital Expenditure'].iloc[0]
-                metrics["raw_cash_flow"] = op_cash + capex
-            except Exception:
-                metrics["raw_cash_flow"] = info_val.get("freeCashflow", 0.0)
-            metrics["cf_label"] = "Free Cash Flow (GAAP)"
-            
-        return metrics
-
-    val_ticker = st.text_input("Enter Ticker to Value (e.g., SOFI, AAPL):", key="val_ticker").strip().upper()
-
-    if val_ticker:
-        with st.spinner(f"Fetching cached financial data for {val_ticker}..."):
-            try:
-                # Call the cached function instead of hitting the API directly
-                metrics = get_valuation_metrics(val_ticker)
+            # If Yahoo rate-limits, it sometimes returns an empty dictionary
+            if not info_val or ('regularMarketPrice' not in info_val and 'currentPrice' not in info_val):
+                raise Exception("Yahoo Finance Rate Limit Hit")
                 
-                current_price = metrics["current_price"]
-                shares_out = metrics["shares_out"]
+            metrics["current_price"] = info_val.get("currentPrice") or info_val.get("regularMarketPrice") or info_val.get("previousClose")
+            metrics["shares_out"] = info_val.get("sharesOutstanding", 1.0)
+            metrics["eps_ttm"] = info_val.get("trailingEps", 0.0)
+            metrics["sector"] = info_val.get("sector", "")
+            metrics["total_cash"] = info_val.get("totalCash", 0.0)
+            metrics["total_debt"] = info_val.get("totalDebt", 0.0)
+            metrics["beta"] = info_val.get("beta", 1.0)
+            metrics["shortName"] = info_val.get("shortName", ticker)
+            
+            try:
+                tnx = yf.Ticker("^TNX")
+                metrics["risk_free_rate"] = tnx.info.get("regularMarketPrice", 4.2) / 100.0
+            except Exception:
+                metrics["risk_free_rate"] = 0.042
+                
+            if metrics["sector"] == "Financial Services":
+                metrics["raw_cash_flow"] = info_val.get("netIncomeToCommon", 0.0)
+                metrics["cf_label"] = "Net Income (Financial Sector)"
+            else:
+                try:
+                    cf = stock_val.cashflow
+                    op_cash = cf.loc['Operating Cash Flow'].iloc[0]
+                    capex = cf.loc['Capital Expenditure'].iloc[0]
+                    metrics["raw_cash_flow"] = op_cash + capex
+                except Exception:
+                    metrics["raw_cash_flow"] = info_val.get("freeCashflow", 0.0)
+                metrics["cf_label"] = "Free Cash Flow (GAAP)"
+                
+            return metrics
+            
+        except Exception as e:
+            # ATTEMPT 2: Gemini AI Fallback (Bypasses Yahoo Finance entirely)
+            if not api_key:
+                raise Exception(f"Yahoo failed and no API key available for fallback. ({e})")
+                
+            client = genai.Client(api_key=api_key)
+            prompt = f"""Search live financial data for the stock ticker '{ticker}'.
+You MUST return ONLY a raw JSON object. No markdown, no backticks, no explanations.
+Find these exact values:
+"current_price" (live stock price),
+"shares_out" (Total shares outstanding as a raw number. E.g., if 15 Billion, write 15000000000),
+"eps_ttm" (Trailing 12 month EPS),
+"sector" (The company's sector, e.g., "Technology" or "Financial Services"),
+"total_cash" (Total cash in raw numbers. E.g., if 50 Billion, write 50000000000),
+"total_debt" (Total debt in raw numbers),
+"beta" (The 5-year monthly Beta),
+"raw_cash_flow" (Free Cash Flow in raw numbers. If a bank, use Net Income instead),
+"shortName" (The company's official name)."""
+
+            res = client.models.generate_content(
+                model="gemini-3.1-flash-lite-preview", contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
+            )
+            
+            raw_json = res.text.strip().replace("```json", "").replace("```", "").strip()
+            parsed = json.loads(raw_json)
+            
+            metrics["current_price"] = float(parsed.get("current_price", 1.0))
+            metrics["shares_out"] = float(parsed.get("shares_out", 1.0))
+            metrics["eps_ttm"] = float(parsed.get("eps_ttm", 0.0))
+            metrics["sector"] = str(parsed.get("sector", ""))
+            metrics["total_cash"] = float(parsed.get("total_cash", 0.0))
+            metrics["total_debt"] = float(parsed.get("total_debt", 0.0))
+            metrics["beta"] = float(parsed.get("beta", 1.0))
+            metrics["shortName"] = str(parsed.get("shortName", ticker))
+            metrics["risk_free_rate"] = 0.042 # Safe static fallback
+            metrics["raw_cash_flow"] = float(parsed.get("raw_cash_flow", 0.0))
+            metrics["cf_label"] = "Cash Flow (AI Fallback Data)"
+            
+            return metrics
+
+    # --- THE FORM SHIELD (Prevents API Spam while typing) ---
+    with st.form("valuation_ticker_form"):
+        col_t1, col_t2 = st.columns([3, 1])
+        with col_t1:
+            input_ticker = st.text_input("Enter Ticker to Value (e.g., SOFI, AAPL):", value=st.session_state.get("active_val_ticker", "")).strip().upper()
+        with col_t2:
+            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+            load_data_btn = st.form_submit_button("📊 Load Financials")
+            
+    # Save the ticker to session state so it doesn't vanish when tweaking sliders
+    if load_data_btn and input_ticker:
+        st.session_state.active_val_ticker = input_ticker
+
+    if st.session_state.get("active_val_ticker"):
+        val_ticker = st.session_state.active_val_ticker
+        
+        with st.spinner(f"Fetching deep financial data for {val_ticker}..."):
+            try:
+                metrics = get_valuation_metrics(val_ticker, st.secrets.get("GOOGLE_API_KEY"))
+                
+                current_price = metrics.get("current_price")
+                shares_out = metrics.get("shares_out", 1.0)
                 
                 if current_price and shares_out:
-                    st.success(f"Data loaded for {metrics['shortName']} | Sector: {metrics['sector']} | Current Price: ${current_price:.2f}")
+                    st.success(f"Data loaded for {metrics.get('shortName')} | Sector: {metrics.get('sector')} | Current Price: ${current_price:.2f}")
                     
                     market_cap = current_price * shares_out if current_price and shares_out else 0.0
                     
@@ -1134,13 +1193,13 @@ with tab3:
                     with st.expander("⚙️ Advanced Model Inputs (WACC & Balance Sheet)", expanded=False):
                         st.caption("Override the scraped data to match your custom assumptions.")
                         ac1, ac2, ac3 = st.columns(3)
-                        edit_beta = ac1.number_input("Beta", value=float(metrics["beta"]), step=0.1)
-                        edit_rf = ac2.number_input("Risk Free Rate %", value=float(metrics["risk_free_rate"]*100), step=0.1) / 100.0
+                        edit_beta = ac1.number_input("Beta", value=float(metrics.get("beta", 1.0)), step=0.1)
+                        edit_rf = ac2.number_input("Risk Free Rate %", value=float(metrics.get("risk_free_rate", 0.042)*100), step=0.1) / 100.0
                         edit_mrp = ac3.number_input("Market Risk Premium %", value=6.0, step=0.1) / 100.0
                         
                         ac4, ac5, ac6 = st.columns(3)
-                        edit_cash = ac4.number_input("Total Cash ($B)", value=float(metrics["total_cash"]/1e9), step=0.1) * 1e9
-                        edit_debt = ac5.number_input("Total Debt ($B)", value=float(metrics["total_debt"]/1e9), step=0.1) * 1e9
+                        edit_cash = ac4.number_input("Total Cash ($B)", value=float(metrics.get("total_cash", 0.0)/1e9), step=0.1) * 1e9
+                        edit_debt = ac5.number_input("Total Debt ($B)", value=float(metrics.get("total_debt", 0.0)/1e9), step=0.1) * 1e9
                         edit_shares = ac6.number_input("Shares Out (Billions)", value=float(shares_out/1e9), step=0.01) * 1e9
                         
                         edit_cost_debt = st.number_input("Cost of Debt %", value=6.0, step=0.5) / 100.0
@@ -1162,7 +1221,7 @@ with tab3:
                         col_a, col_b = st.columns(2)
                         with col_a:
                             g_short = st.number_input("Auto-Fill Growth Yrs 1-5 (%)", value=15.0, step=1.0) / 100.0
-                            base_cf_input = st.number_input(f"Base {metrics['cf_label']} ($B)", value=float(metrics["raw_cash_flow"] / 1e9), step=0.1)
+                            base_cf_input = st.number_input(f"Base {metrics.get('cf_label')} ($B)", value=float(metrics.get("raw_cash_flow", 0.0) / 1e9), step=0.1)
                         with col_b:
                             g_trans = st.number_input("Auto-Fill Growth Yrs 6-10 (%)", value=float((g_short*100)/2), step=1.0) / 100.0
                             g_lt = st.number_input("Terminal Growth LT (%)", value=3.0, step=0.5) / 100.0
@@ -1230,7 +1289,7 @@ with tab3:
                         st.subheader("3. EPS × P/E Return Model")
                         pe_c1, pe_c2 = st.columns(2)
                         with pe_c1:
-                            eps_input = st.number_input("Current EPS", value=float(metrics["eps_ttm"]), step=0.5)
+                            eps_input = st.number_input("Current EPS", value=float(metrics.get("eps_ttm", 0.0)), step=0.5)
                             eps_cagr = st.number_input("Expected EPS CAGR %", value=12.0, step=1.0) / 100.0
                         with pe_c2:
                             years_out = st.number_input("Years to Hold", value=5, step=1)
@@ -1245,4 +1304,4 @@ with tab3:
                 else:
                     st.error("Could not pull reliable financial data for this ticker.")
             except Exception as e:
-                st.error(f"Error loading valuation data: {e}")
+                st.error(f"Error loading valuation data. Please check your API key or try again later. ({e})")
