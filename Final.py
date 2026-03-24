@@ -1074,7 +1074,7 @@ with tab2:
 # ==============================================================================
 with tab3:
     st.header("🧮 Valuation Workbench")
-    st.markdown("Stress-test your thesis. Upgraded with an Interactive Cash Flow Grid, True WACC, and EV-to-Equity bridging.")
+    st.markdown("Stress-test your thesis with institutional-grade math. Modify the inputs to build your own custom scenarios.")
 
     # --- THE INVINCIBLE DATA FETCHER ---
     @st.cache_data(ttl=3600, show_spinner=False)
@@ -1086,7 +1086,6 @@ with tab3:
             stock_val = yf.Ticker(ticker)
             info_val = stock_val.info
             
-            # If Yahoo rate-limits, it sometimes returns an empty dictionary
             if not info_val or ('regularMarketPrice' not in info_val and 'currentPrice' not in info_val):
                 raise Exception("Yahoo Finance Rate Limit Hit")
                 
@@ -1121,7 +1120,7 @@ with tab3:
             return metrics
             
         except Exception as e:
-            # ATTEMPT 2: Gemini AI Fallback (Bypasses Yahoo Finance entirely)
+            # ATTEMPT 2: Gemini AI Fallback
             if not api_key:
                 raise Exception(f"Yahoo failed and no API key available for fallback. ({e})")
                 
@@ -1130,10 +1129,10 @@ with tab3:
 You MUST return ONLY a raw JSON object. No markdown, no backticks, no explanations.
 Find these exact values:
 "current_price" (live stock price),
-"shares_out" (Total shares outstanding as a raw number. E.g., if 15 Billion, write 15000000000),
+"shares_out" (Total shares outstanding as a raw number),
 "eps_ttm" (Trailing 12 month EPS),
-"sector" (The company's sector, e.g., "Technology" or "Financial Services"),
-"total_cash" (Total cash in raw numbers. E.g., if 50 Billion, write 50000000000),
+"sector" (The company's sector),
+"total_cash" (Total cash in raw numbers),
 "total_debt" (Total debt in raw numbers),
 "beta" (The 5-year monthly Beta),
 "raw_cash_flow" (Free Cash Flow in raw numbers. If a bank, use Net Income instead),
@@ -1155,13 +1154,13 @@ Find these exact values:
             metrics["total_debt"] = float(parsed.get("total_debt", 0.0))
             metrics["beta"] = float(parsed.get("beta", 1.0))
             metrics["shortName"] = str(parsed.get("shortName", ticker))
-            metrics["risk_free_rate"] = 0.042 # Safe static fallback
+            metrics["risk_free_rate"] = 0.042 
             metrics["raw_cash_flow"] = float(parsed.get("raw_cash_flow", 0.0))
             metrics["cf_label"] = "Cash Flow (AI Fallback Data)"
             
             return metrics
 
-    # --- THE FORM SHIELD (Prevents API Spam while typing) ---
+    # --- THE FORM SHIELD ---
     with st.form("valuation_ticker_form"):
         col_t1, col_t2 = st.columns([3, 1])
         with col_t1:
@@ -1170,7 +1169,6 @@ Find these exact values:
             st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
             load_data_btn = st.form_submit_button("📊 Load Financials")
             
-    # Save the ticker to session state so it doesn't vanish when tweaking sliders
     if load_data_btn and input_ticker:
         st.session_state.active_val_ticker = input_ticker
 
@@ -1214,7 +1212,10 @@ Find these exact values:
                     vc1, vc2 = st.columns([1, 1])
                     
                     with vc1:
-                        st.subheader("1. Discounted Cash Flow")
+                        # -------------------------------------------------------------
+                        # FEATURE 1: SCENARIO DCF (GORDON GROWTH MODEL)
+                        # -------------------------------------------------------------
+                        st.subheader("1. Scenario DCF (3-Stage Model)")
                         
                         wacc_input = st.number_input("WACC (Discount Rate) %", value=float(calculated_wacc * 100), step=0.5) / 100.0
                         
@@ -1227,7 +1228,7 @@ Find these exact values:
                             g_lt = st.number_input("Terminal Growth LT (%)", value=3.0, step=0.5) / 100.0
                             
                         # Build the editable DataFrame
-                        st.markdown("**Projected Cash Flows ($ Billions)** - *Edit cells directly!*")
+                        st.markdown("**Projected Cash Flows ($ Billions)** - *Edit cells directly to build custom scenarios!*")
                         years = [f"Year {i}" for i in range(1, 11)]
                         default_cfs = []
                         curr = base_cf_input
@@ -1241,13 +1242,13 @@ Find these exact values:
                         df_cfs = pd.DataFrame({"Projected CF ($B)": default_cfs}, index=years)
                         edited_df = st.data_editor(df_cfs, use_container_width=True)
                         
-                        # Math Engine
+                        # Institutional Math Engine
                         cash_flows = edited_df["Projected CF ($B)"].tolist()
                         pv_cash_flows = []
                         for i, cf_val in enumerate(cash_flows):
                             pv_cash_flows.append((cf_val * 1e9) / ((1 + wacc_input) ** (i + 1)))
                             
-                        # Terminal Value
+                        # Terminal Value (Gordon Growth)
                         year_10_cf = cash_flows[-1] * 1e9
                         if wacc_input > g_lt:
                             terminal_value = (year_10_cf * (1 + g_lt)) / (wacc_input - g_lt)
@@ -1265,27 +1266,90 @@ Find these exact values:
                             else:
                                 st.error(f"Overvalued by {abs(margin_of_safety):.1f}%")
                                 
-                            with st.expander("🔍 Show Valuation Bridge"):
+                            with st.expander("🔍 Show Valuation Bridge (EV to Equity)"):
                                 st.caption(f"PV of 10-Yr Cash Flows: **${sum(pv_cash_flows)/1e9:.2f}B**")
                                 st.caption(f"PV of Terminal Value: **${pv_terminal_value/1e9:.2f}B**")
-                                st.caption(f"Value of Operations: **${value_of_operations/1e9:.2f}B**")
-                                st.caption(f"+ Cash: **${edit_cash/1e9:.2f}B**")
+                                st.caption(f"Value of Operations (EV): **${value_of_operations/1e9:.2f}B**")
+                                st.caption(f"+ Non-Op Assets (Cash): **${edit_cash/1e9:.2f}B**")
                                 st.caption(f"- Debt: **${edit_debt/1e9:.2f}B**")
                                 st.caption(f"**= Value of Equity: ${equity_value/1e9:.2f}B**")
+                                
+                            # -------------------------------------------------------------
+                            # FEATURE 2: SENSITIVITY TABLES
+                            # -------------------------------------------------------------
+                            st.markdown("##### Valuation Sensitivity Matrix")
+                            st.caption("Flexes Terminal Growth vs. Discount Rate (WACC)")
+                            
+                            rates = [wacc_input - 0.02, wacc_input, wacc_input + 0.02]
+                            growths = [g_lt - 0.01, g_lt, g_lt + 0.01]
+                            matrix = []
+                            
+                            for g in growths:
+                                row = []
+                                for r in rates:
+                                    if r > g:
+                                        pv_cfs_matrix = sum([(cf * 1e9) / ((1 + r) ** (i + 1)) for i, cf in enumerate(cash_flows)])
+                                        tv_matrix = (year_10_cf * (1 + g)) / (r - g)
+                                        pv_tv_matrix = tv_matrix / ((1 + r) ** 10)
+                                        eq_val_matrix = pv_cfs_matrix + pv_tv_matrix + edit_cash - edit_debt
+                                        val_per_share = max(0, eq_val_matrix / edit_shares)
+                                        row.append(f"${val_per_share:.2f}")
+                                    else:
+                                        row.append("N/A")
+                                matrix.append(row)
+                                
+                            sens_df = pd.DataFrame(matrix, columns=[f"WACC {r*100:.1f}%" for r in rates], index=[f"Term. Growth {g*100:.1f}%" for g in growths])
+                            st.dataframe(sens_df, use_container_width=True)
+
                         else:
-                            st.error("WACC must be higher than Terminal Growth to calculate.")
+                            st.error("WACC must be strictly higher than Terminal Growth to calculate Intrinsic Value.")
 
                     with vc2:
-                        st.subheader("2. Yield Comparison")
-                        fcf_yield = (base_cf_input * 1e9) / market_cap if market_cap > 0 else 0
-                        equity_risk_premium = fcf_yield - edit_rf
+                        # -------------------------------------------------------------
+                        # FEATURE 3: REVERSE DCF
+                        # -------------------------------------------------------------
+                        st.subheader("2. Reverse DCF (Market Expectations)")
+                        st.caption("What growth is the market pricing into the current stock price?")
                         
-                        y1, y2, y3 = st.columns(3)
-                        y1.metric("Cash Flow Yield", f"{fcf_yield*100:.2f}%")
-                        y2.metric("Risk-Free Rate", f"{edit_rf*100:.2f}%")
-                        y3.metric("Risk Premium", f"{equity_risk_premium*100:.2f}%")
-
+                        def solve_reverse_dcf(target_price, base_cf, shares, wacc, term_g, cash, debt):
+                            low, high = -0.50, 1.50
+                            implied = 0.0
+                            for _ in range(60):
+                                mid = (low + high) / 2
+                                # Build temporary cash flows using the mid rate
+                                temp_cfs = []
+                                curr_cf = base_cf
+                                # Yrs 1-5
+                                for i in range(1, 6):
+                                    curr_cf *= (1 + mid)
+                                    temp_cfs.append(curr_cf / ((1 + wacc) ** i))
+                                # Yrs 6-10 (Transition = Half of Short term)
+                                for i in range(6, 11):
+                                    curr_cf *= (1 + (mid/2))
+                                    temp_cfs.append(curr_cf / ((1 + wacc) ** i))
+                                
+                                term_val = (curr_cf * (1 + term_g)) / (wacc - term_g)
+                                pv_term = term_val / ((1 + wacc) ** 10)
+                                
+                                test_price = (sum(temp_cfs) + pv_term + cash - debt) / shares
+                                
+                                if test_price > target_price: high = mid
+                                else: low = mid
+                                implied = mid
+                            return implied
+                        
+                        # Only run if math permits
+                        if wacc_input > g_lt and base_cf_input > 0:
+                            implied_growth = solve_reverse_dcf(current_price, (base_cf_input * 1e9), edit_shares, wacc_input, g_lt, edit_cash, edit_debt)
+                            st.info(f"To justify its current price of **${current_price:.2f}**, {val_ticker} must grow cash flows at **{implied_growth*100:.1f}%** for Yrs 1-5, and **{(implied_growth/2)*100:.1f}%** for Yrs 6-10.")
+                        else:
+                            st.info("Reverse DCF requires a positive base cash flow and WACC > Terminal Growth.")
+                            
                         st.markdown("---")
+                        
+                        # -------------------------------------------------------------
+                        # FEATURE 4: EPS x P/E SCENARIOS
+                        # -------------------------------------------------------------
                         st.subheader("3. EPS × P/E Return Model")
                         pe_c1, pe_c2 = st.columns(2)
                         with pe_c1:
@@ -1301,6 +1365,24 @@ Find these exact values:
                         
                         st.markdown(f"**Year {years_out} Projected Price:** ${future_price:.2f}")
                         st.markdown(f"**Annualized Return (CAGR):** {annualized_return:.1f}%")
+                        
+                        st.markdown("---")
+                        
+                        # -------------------------------------------------------------
+                        # FEATURE 5 & 6: FCF YIELD & BOND YIELD COMPARISON
+                        # -------------------------------------------------------------
+                        st.subheader("4. Yield Comparison (Risk Premium)")
+                        st.caption("Are you being compensated for taking equity risk over government bonds?")
+                        
+                        # Using user's modified base cash flow input for yield
+                        calc_yield = (base_cf_input * 1e9) / market_cap if market_cap > 0 else 0
+                        equity_risk_premium = calc_yield - edit_rf
+                        
+                        y1, y2, y3 = st.columns(3)
+                        y1.metric(f"Current {metrics.get('cf_label').split(' ')[0]} Yield", f"{calc_yield*100:.2f}%")
+                        y2.metric("10-Yr Treasury", f"{edit_rf*100:.2f}%")
+                        y3.metric("Equity Risk Premium", f"{equity_risk_premium*100:.2f}%")
+                        
                 else:
                     st.error("Could not pull reliable financial data for this ticker.")
             except Exception as e:
