@@ -1033,63 +1033,17 @@ RESEARCH DATA:
                 display_ui_scorecard(task["scorecard"])
 
 # ==============================================================================
-# --- TAB 2: MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
-# ==============================================================================
-with tab2:
-    st.markdown("### 📚 My Research Library (Permanent Dossiers & Scorecards)")
-    st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
-
-    if not user_email_clean or "@" not in user_email_clean:
-        st.warning("Please enter your email on the 'Research' tab to access your saved library.")
-    else:
-        dossier_df = get_user_dossiers(user_email_clean)
-        
-        if dossier_df.empty:
-            st.info("Your library is currently empty. Run your first stock report to build your first dossier!")
-        else:
-            saved_tickers = dossier_df['ticker'].unique().tolist()
-            selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
-            
-            dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
-            
-            st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
-            st.caption(f"Last Updated: {dossier_data['last_updated']}")
-            
-            if "scorecard" in dossier_data and dossier_data["scorecard"] and dossier_data["scorecard"] != "{}":
-                try:
-                    saved_scorecard = json.loads(dossier_data["scorecard"])
-                    display_ui_scorecard(saved_scorecard)
-                except Exception: pass
-            
-            with st.expander("📖 Business Summary", expanded=True):
-                st.markdown(dossier_data['business_summary'])
-            with st.expander("🏰 Moat Notes"):
-                st.markdown(dossier_data['moat_notes'])
-            with st.expander("👔 Management Notes"):
-                st.markdown(dossier_data['management_notes'])
-            with st.expander("📊 Key Metrics"):
-                st.markdown(dossier_data['key_metrics'])
-            with st.expander("🟢 Bull Thesis"):
-                st.markdown(dossier_data['thesis'])
-            with st.expander("🔴 Anti-Thesis (Risks)"):
-                st.markdown(dossier_data['anti_thesis'])
-            with st.expander("⚖️ Valuation Assumptions"):
-                st.markdown(dossier_data['valuation_assumptions'])
-            with st.expander("👀 Watchlist Triggers"):
-                st.markdown(dossier_data['watchlist_triggers'])
-
-# ==============================================================================
 # --- 10. TAB 3: VALUATION WORKBENCH (THE QUANTITATIVE LAYER) ---
 # ==============================================================================
 with tab3:
     st.header("🧮 Valuation Workbench")
     st.markdown("Stress-test your thesis with institutional-grade math. Modify the inputs to build your own custom scenarios.")
 
-    # --- THE INVINCIBLE DATA FETCHER ---
+    # --- THE INVINCIBLE DATA FETCHER (NOW WITH HISTORICAL TRENDS) ---
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_valuation_metrics(ticker, api_key):
-        """Fetches data and caches it. Has a built-in AI fallback if Yahoo bans the IP."""
-        metrics = {"shortName": ticker}
+        """Fetches data, historical financials, and caches it. Strict AI fallback included."""
+        metrics = {"shortName": ticker, "historical_data": []}
         try:
             # ATTEMPT 1: Yahoo Finance
             stock_val = yf.Ticker(ticker)
@@ -1113,14 +1067,42 @@ with tab3:
             except Exception:
                 metrics["risk_free_rate"] = 0.042
                 
+            # --- Fetch Historical Financials for the Graph ---
+            try:
+                fin = stock_val.financials
+                cf = stock_val.cashflow
+                
+                if not fin.empty and not cf.empty:
+                    # Get the last 4 reported years and reverse them so they are chronological
+                    dates = fin.columns[:4][::-1]
+                    hist_list = []
+                    for d in dates:
+                        # Safely extract metrics, defaulting to 0 if missing
+                        rev = fin.loc['Total Revenue', d] if 'Total Revenue' in fin.index else 0
+                        ni = fin.loc['Net Income', d] if 'Net Income' in fin.index else 0
+                        
+                        op_cash = cf.loc['Operating Cash Flow', d] if 'Operating Cash Flow' in cf.index else 0
+                        capex = cf.loc['Capital Expenditure', d] if 'Capital Expenditure' in cf.index else 0
+                        fcf = op_cash + capex # Capex is reported negative, so we add it
+                        
+                        hist_list.append({
+                            "Year": str(d.year),
+                            "Revenue ($B)": rev / 1e9 if pd.notna(rev) else 0,
+                            "Net Income ($B)": ni / 1e9 if pd.notna(ni) else 0,
+                            "Free Cash Flow ($B)": fcf / 1e9 if pd.notna(fcf) else 0
+                        })
+                    metrics["historical_data"] = hist_list
+            except Exception as e:
+                print(f"Graph Data Error: {e}")
+                
             if metrics["sector"] == "Financial Services":
                 metrics["raw_cash_flow"] = info_val.get("netIncomeToCommon", 0.0)
                 metrics["cf_label"] = "Net Income (Financial Sector)"
             else:
                 try:
-                    cf = stock_val.cashflow
-                    op_cash = cf.loc['Operating Cash Flow'].iloc[0]
-                    capex = cf.loc['Capital Expenditure'].iloc[0]
+                    cf_stmt = stock_val.cashflow
+                    op_cash = cf_stmt.loc['Operating Cash Flow'].iloc[0]
+                    capex = cf_stmt.loc['Capital Expenditure'].iloc[0]
                     metrics["raw_cash_flow"] = op_cash + capex
                 except Exception:
                     metrics["raw_cash_flow"] = info_val.get("freeCashflow", 0.0)
@@ -1135,21 +1117,17 @@ with tab3:
                 
             client = genai.Client(api_key=api_key)
             prompt = f"""Search live financial data for the stock ticker '{ticker}'.
-You MUST return ONLY a raw JSON object. No markdown, no backticks, no explanations.
+CRITICAL RULE 1: Extract data ONLY from reputable sources (SEC, Yahoo, Bloomberg).
+CRITICAL RULE 2: DO NOT invent numbers. If unverifiable, return 0.0.
+
+You MUST return ONLY a raw JSON object. No markdown, no backticks.
 Find these exact values:
-"current_price" (live stock price),
-"shares_out" (Total shares outstanding as a raw number),
-"eps_ttm" (Trailing 12 month EPS),
-"sector" (The company's sector),
-"total_cash" (Total cash in raw numbers),
-"total_debt" (Total debt in raw numbers),
-"beta" (The 5-year monthly Beta),
-"raw_cash_flow" (Free Cash Flow in raw numbers. If a bank, use Net Income instead),
-"shortName" (The company's official name)."""
+"current_price", "shares_out", "eps_ttm", "sector", "total_cash", "total_debt", "beta", "raw_cash_flow", "shortName".
+Also include "historical_data": An array of 4 objects for the last 4 years. Each object needs: "Year" (string), "Revenue ($B)" (float), "Net Income ($B)" (float), "Free Cash Flow ($B)" (float)."""
 
             res = client.models.generate_content(
                 model="gemini-3.1-flash-lite-preview", contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1, tools=[types.Tool(google_search=types.GoogleSearch())])
+                config=types.GenerateContentConfig(temperature=0.0, tools=[types.Tool(google_search=types.GoogleSearch())])
             )
             
             raw_json = res.text.strip().replace("```json", "").replace("```", "").strip()
@@ -1166,6 +1144,7 @@ Find these exact values:
             metrics["risk_free_rate"] = 0.042 
             metrics["raw_cash_flow"] = float(parsed.get("raw_cash_flow", 0.0))
             metrics["cf_label"] = "Cash Flow (AI Fallback Data)"
+            metrics["historical_data"] = parsed.get("historical_data", [])
             
             return metrics
 
@@ -1195,6 +1174,21 @@ Find these exact values:
                     st.success(f"Data loaded for {metrics.get('shortName')} | Sector: {metrics.get('sector')} | Current Price: ${current_price:.2f}")
                     
                     market_cap = current_price * shares_out if current_price and shares_out else 0.0
+                    
+                    # -------------------------------------------------------------
+                    # NEW FEATURE: HISTORICAL FINANCIAL TRENDS GRAPH
+                    # -------------------------------------------------------------
+                    hist_data = metrics.get("historical_data", [])
+                    if hist_data and len(hist_data) > 0:
+                        st.markdown("### 📈 Historical Financial Trends (Last 4 Years)")
+                        st.caption("Evaluate the company's past trajectory before projecting its future cash flows.")
+                        
+                        # Convert the list of dictionaries into a Pandas DataFrame and set the Year as the index
+                        df_hist = pd.DataFrame(hist_data).set_index("Year")
+                        
+                        # Render a beautiful native Streamlit bar chart
+                        st.bar_chart(df_hist, use_container_width=True)
+                        st.markdown("---")
                     
                     # --- ADVANCED INPUTS EXPANDER ---
                     with st.expander("⚙️ Advanced Model Inputs (WACC & Balance Sheet)", expanded=False):
