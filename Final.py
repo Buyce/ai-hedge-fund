@@ -701,16 +701,24 @@ with tab1:
     user_email = st.text_input("📧 Enter your email to receive the final report ZIP and access your Library:")
     user_email_clean = user_email.strip().lower()
 
+    user_tier_ui = get_user_tier(user_email_clean)
     is_super_user = user_email_clean in SUPER_USERS
     if user_email_clean and "@" in user_email_clean:
         if is_super_user: st.success("🌟 Super User Access: Unlimited Reports Available")
         else:
             p_runs, p_reps, s_reps = get_usage(user_email_clean)
+            
+            # Dynamic UI Limits based on Tier
+            if user_tier_ui in ["Pro", "Ultra"]:
+                limit_p_runs, limit_p_reps, limit_s_reps = 10, 20, 50 # Generous limits for Paid
+            else:
+                limit_p_runs, limit_p_reps, limit_s_reps = 3, 4, 15   # Freemium limits for Free
+                
             st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
             q1, q2, q3 = st.columns(3)
-            q1.metric("Premium Runs", f"{max(0, 3 - p_runs)} / 3")
-            q2.metric("Premium Reports", f"{max(0, 4 - p_reps)} / 4")
-            q3.metric("Standard Reports", f"{max(0, 15 - s_reps)} / 15")
+            q1.metric("Premium Runs", f"{max(0, limit_p_runs - p_runs)} / {limit_p_runs}")
+            q2.metric("Premium Reports", f"{max(0, limit_p_reps - p_reps)} / {limit_p_reps}")
+            q3.metric("Standard Reports", f"{max(0, limit_s_reps - s_reps)} / {limit_s_reps}")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1053,40 +1061,44 @@ with tab1:
             st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
             st.stop()
 
-        # Check if the user selected a paid podcast tier
         user_tier = get_user_tier(user_email_clean)
         num_requested = len(selected_prompts)
+        p_runs, p_reps, s_reps = get_usage(user_email_clean)
 
-        # --- THE PAYWALL GATEKEEPER ---
+        # --- THE FREEMIUM GATEKEEPER ---
         if not is_super_user:
-            # 1. Enforce AI Engine & Tool Restrictions
-            if selected_brain == "gemini-3.1-pro-preview" and user_tier == "Free":
-                st.error("🛑 **Premium Feature:** The Gemini 3.1 Pro reasoning engine requires a **Pro** or **Ultra** subscription. Please upgrade to unlock Wall Street-level analysis.")
-                st.stop()
-                
-            if tool_choice == "Deep Research" and user_tier == "Free":
-                st.error("🛑 **Premium Feature:** Deep Research web grounding requires a **Pro** or **Ultra** subscription. Please upgrade.")
-                st.stop()
-                
-            # 2. Enforce Podcast Restrictions
-            if "Pro Tier" in podcast_tier and user_tier == "Free":
-                st.error("🎙️ **Premium Audio:** The 10-Minute Deep Dive Podcast requires a **Pro** or **Ultra** subscription. Please upgrade your account to generate this audio.")
-                st.stop()
-                
+            # 1. Enforce Ultra-Exclusive Features (No free trials for Ultra)
             if "Ultra Tier" in podcast_tier and user_tier in ["Free", "Pro"]:
                 st.error("👑 **Ultra Feature:** The 20-Minute Institutional Masterclass Podcast is an exclusive feature for **Ultra** subscribers. Please upgrade your account.")
                 st.stop()
-
-            # 3. Enforce Abuse/Bot Quotas (To protect your API costs even for paid users)
-            p_runs, p_reps, s_reps = get_usage(user_email_clean)
-            if user_tier in ["Pro", "Ultra"]:
-                if p_runs >= 10: st.error("🛑 Fair Use Limit: You have hit the maximum of 10 Premium runs for the last 48 hours to protect server load."); st.stop()
-            else: # Free Users
-                if s_reps + num_requested > 15: st.error(f"🛑 Free Tier Limit: You only have {max(0, 15 - s_reps)} standard reports remaining for the next 48 hours."); st.stop()
+                
+            # Define what counts as a Premium Request
+            is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "Pro Tier" in podcast_tier)
+            
+            # 2. Freemium Quotas (Free users get a taste of Pro features)
+            if user_tier == "Free":
+                if is_premium_request:
+                    if p_runs >= 3: 
+                        st.error("🛑 **Premium Trial Exhausted:** You have used your 3 free Premium runs. Please upgrade to **Pro** or **Ultra** to continue using Gemini Pro, Deep Research, or Pro Podcasts.")
+                        st.stop()
+                    if p_reps + num_requested > 4: 
+                        st.error(f"🛑 **Premium Trial Limit:** You requested {num_requested} Premium reports, but only have {max(0, 4 - p_reps)} free premium reports remaining.")
+                        st.stop()
+                else:
+                    if s_reps + num_requested > 15: 
+                        st.error(f"🛑 **Free Tier Limit:** You only have {max(0, 15 - s_reps)} standard reports remaining for the next 48 hours. Upgrade for unlimited access.")
+                        st.stop()
+                        
+            # 3. Paid User Fair Use Quotas (To protect server costs)
+            elif user_tier in ["Pro", "Ultra"]:
+                if p_runs >= 10: 
+                    st.error("🛑 Fair Use Limit: You have hit the maximum of 10 Premium runs for the last 48 hours to protect server load.")
+                    st.stop()
 
         # Log usage to track API load
-        is_premium_run = (user_tier in ["Pro", "Ultra"])
+        is_premium_run = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "👑" in podcast_tier)
         log_usage(user_email_clean, is_premium_run, num_requested)
+        
         safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
         save_lead(user_email_clean, safe_ticker)
 
