@@ -1031,7 +1031,51 @@ RESEARCH DATA:
                     
             if task.get("scorecard"):
                 display_ui_scorecard(task["scorecard"])
+# ==============================================================================
+# --- TAB 2: MY RESEARCH LIBRARY (THE PERMANENT DOSSIER) ---
+# ==============================================================================
+with tab2:
+    st.markdown("### 📚 My Research Library (Permanent Dossiers & Scorecards)")
+    st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
 
+    if not user_email_clean or "@" not in user_email_clean:
+        st.warning("Please enter your email on the 'Research' tab to access your saved library.")
+    else:
+        dossier_df = get_user_dossiers(user_email_clean)
+        
+        if dossier_df.empty:
+            st.info("Your library is currently empty. Run your first stock report to build your first dossier!")
+        else:
+            saved_tickers = dossier_df['ticker'].unique().tolist()
+            selected_library_ticker = st.selectbox("Select a company dossier to view:", saved_tickers)
+            
+            dossier_data = dossier_df[dossier_df['ticker'] == selected_library_ticker].iloc[0]
+            
+            st.markdown(f"#### 🏢 Dossier: {selected_library_ticker}")
+            st.caption(f"Last Updated: {dossier_data['last_updated']}")
+            
+            if "scorecard" in dossier_data and dossier_data["scorecard"] and dossier_data["scorecard"] != "{}":
+                try:
+                    saved_scorecard = json.loads(dossier_data["scorecard"])
+                    display_ui_scorecard(saved_scorecard)
+                except Exception: pass
+            
+            with st.expander("📖 Business Summary", expanded=True):
+                st.markdown(dossier_data['business_summary'])
+            with st.expander("🏰 Moat Notes"):
+                st.markdown(dossier_data['moat_notes'])
+            with st.expander("👔 Management Notes"):
+                st.markdown(dossier_data['management_notes'])
+            with st.expander("📊 Key Metrics"):
+                st.markdown(dossier_data['key_metrics'])
+            with st.expander("🟢 Bull Thesis"):
+                st.markdown(dossier_data['thesis'])
+            with st.expander("🔴 Anti-Thesis (Risks)"):
+                st.markdown(dossier_data['anti_thesis'])
+            with st.expander("⚖️ Valuation Assumptions"):
+                st.markdown(dossier_data['valuation_assumptions'])
+            with st.expander("👀 Watchlist Triggers"):
+                st.markdown(dossier_data['watchlist_triggers'])
 # ==============================================================================
 # --- 10. TAB 3: VALUATION WORKBENCH (THE QUANTITATIVE LAYER) ---
 # ==============================================================================
