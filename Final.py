@@ -648,8 +648,15 @@ with tab1:
     selected_prompts = st.multiselect("📑 Choose specific research reports to generate:", list(gem_prompts.keys()), default=[], placeholder="No reports selected yet...")
 
     if "ELEVENLABS_API_KEY" in st.secrets:
-        generate_audio = st.checkbox("🎧 Generate an AI Co-Host Audio Podcast (.mp3)", help="Powered by ElevenLabs.")
+        podcast_tier = st.radio("🎧 Select AI Co-Host Podcast Length:", [
+            "No Podcast (Text Only)",
+            "Free Tier (~5-6 Minutes / General Overview)",
+            "Pro Tier (~10 Minutes / Deep Dive) 👑",
+            "Ultra Tier (~20 Minutes / Masterclass) 👑"
+        ], index=0, help="Powered by ElevenLabs. Pro and Ultra tiers require Premium quotas.")
+        generate_audio = podcast_tier != "No Podcast (Text Only)"
     else:
+        podcast_tier = "No Podcast (Text Only)"
         generate_audio = False
         st.caption("🎧 *Premium Audio Podcast feature disabled*")
 
@@ -848,20 +855,36 @@ with tab1:
 
         audio_bytes = None
         if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
-            update_task_progress(email, 0.89, "Stage 3: Writing Co-Host Podcast Script...")
+            # We pass podcast_tier through the function arguments (handled in Step 3)
+            tier_name = podcast_tier.split('(')[0].strip() if podcast_tier else "Podcast"
+            update_task_progress(email, 0.89, f"Stage 3: Writing {tier_name} Script...")
             try:
                 if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"]
                 elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"]
                 elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"]
                 else: active_persona = PODCAST_PROMPTS["Concept"]
 
+                # 1. Strip the old hardcoded length from the prompt
+                active_persona = active_persona.replace("Length: approx 600 words.", "")
+
+                # 2. Inject the dynamic length constraints
+                length_instructions = {
+                    "Free Tier (~5-6 Minutes / General Overview)": "CRITICAL LENGTH TARGET: Write a minimum of 900 words (approx 5-6 minutes of spoken audio). Build a solid 4-part conversation.",
+                    "Pro Tier (~10 Minutes / Deep Dive) 👑": "CRITICAL LENGTH TARGET: Write a minimum of 1600 words (approx 10 minutes of spoken audio). DO NOT SUMMARIZE QUICKLY. Expand heavily on the data, debate the specific metrics, and build a deep 5-part conversation.",
+                    "Ultra Tier (~20 Minutes / Masterclass) 👑": "CRITICAL LENGTH TARGET: Write a minimum of 3200 words (approx 20 minutes of spoken audio). THIS IS A MASTERCLASS. You must write an extremely long, exhaustive, line-by-line breakdown. Leave no metric un-discussed. Dive deeply into the bull vs bear thesis, historical context, and valuation scenarios. Use a 6-part exhaustive structure."
+                }
+                length_constraint = length_instructions.get(podcast_tier, length_instructions["Free Tier (~5-6 Minutes / General Overview)"])
+
                 pod_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in final_user_reports.items()])
                 pod_instr = (active_persona.replace("[Company_name]", resolved_company).replace("[Industry Name]", industry).replace("{{CEO Name}}", resolved_ceo).replace("{CONCEPT NAME}", concept))
                 
-                res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\nDATA:\n{pod_context}")
+                # Combine it all into the final prompt
+                prompt_payload = f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\n{length_constraint}\n\nDATA:\n{pod_context}"
+                
+                res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt_payload)
                 script_text = res.text.strip()
                 
-                update_task_progress(email, 0.92, "Stage 4: Generating ElevenLabs Premium Audio...")
+                update_task_progress(email, 0.91, f"Stage 4: Rendering {tier_name} Audio (This may take several minutes)...")
                 voice_host_a = "29vD33N1CtxCmqQRPOHJ" 
                 voice_host_b = "21m00Tcm4TlvDq8ikWAM" 
                 api_key_11 = st.secrets["ELEVENLABS_API_KEY"]
@@ -944,13 +967,14 @@ with tab1:
             st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
             st.stop()
 
-        is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research")
+        # Check if the user selected a paid podcast tier
+        is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "👑" in podcast_tier)
         num_requested = len(selected_prompts)
 
         if not is_super_user:
             p_runs, p_reps, s_reps = get_usage(user_email_clean)
             if is_premium_request:
-                if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs for the last 48 hours."); st.stop()
+                if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs. Pro and Ultra podcasts require a Premium run."); st.stop()
                 if p_reps + num_requested > 6: st.error(f"🛑 You requested {num_requested} Premium reports, but only have {max(0, 6 - p_reps)} remaining for the next 48 hours."); st.stop()
             else:
                 if s_reps + num_requested > 30: st.error(f"🛑 You requested {num_requested} Standard reports, but only have {max(0, 30 - s_reps)} remaining for the next 48 hours."); st.stop()
@@ -959,8 +983,12 @@ with tab1:
         safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
         save_lead(user_email_clean, safe_ticker)
 
+        # Calculate ETA based on podcast length
         base_time = 45 + (num_requested * (120 if tool_choice == "Deep Research" else 20))
-        if generate_audio: base_time += 60 
+        if generate_audio:
+            if "Ultra" in podcast_tier: base_time += 240 # ~4 mins to render 20 min audio
+            elif "Pro" in podcast_tier: base_time += 120 # ~2 mins to render 10 min audio
+            else: base_time += 60 # ~1 min for Free tier
 
         global_tasks[user_email_clean] = {
             "status": "running", "progress": "Starting...", "progress_pct": 0.02,
@@ -969,8 +997,18 @@ with tab1:
             "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
         }
 
-        background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
+        # IMPORTANT: We also must update the def execute_background_job line at the top to accept podcast_tier!
+        # Because Python functions must match, we pass podcast_tier as a global variable instead to save you from rewriting the whole function header.
+        st.session_state.current_podcast_tier = podcast_tier
+        
+        def execute_job_wrapper(*args):
+            # Hack to sneak the podcast_tier variable into the function without breaking your background worker
+            global podcast_tier 
+            podcast_tier = st.session_state.current_podcast_tier
+            execute_background_job(*args)
 
+        background_executor.submit(execute_job_wrapper, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
+    
     if user_email_clean in global_tasks:
         task = global_tasks[user_email_clean]
 
