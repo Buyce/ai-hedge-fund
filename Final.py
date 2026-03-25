@@ -32,6 +32,10 @@ SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
 # --- 1. SELF-HEALING DATABASE, QUOTAS, & DOSSIER LOGIC ---
 # ==============================================================================
 
+# ==============================================================================
+# --- 1. SELF-HEALING DATABASE, QUOTAS, & DOSSIER LOGIC ---
+# ==============================================================================
+
 def init_db():
     try:
         conn = sqlite3.connect("users.db")
@@ -40,27 +44,40 @@ def init_db():
         c.execute("""CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT, run_timestamp TEXT, is_premium BOOLEAN, report_count INTEGER)""")
         c.execute("""CREATE TABLE IF NOT EXISTS alerts (email TEXT, alert_type TEXT, timestamp TEXT)""")
         
+        # --- NEW: SUBSCRIPTION TABLE ---
+        c.execute("""CREATE TABLE IF NOT EXISTS subscriptions (email TEXT PRIMARY KEY, tier TEXT)""")
+        
         c.execute("""CREATE TABLE IF NOT EXISTS dossiers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT,
-            ticker TEXT,
-            business_summary TEXT,
-            moat_notes TEXT,
-            management_notes TEXT,
-            key_metrics TEXT,
-            thesis TEXT,
-            anti_thesis TEXT,
-            valuation_assumptions TEXT,
-            watchlist_triggers TEXT,
-            last_updated TEXT,
-            UNIQUE(email, ticker)
+            email TEXT, ticker TEXT, business_summary TEXT, moat_notes TEXT, management_notes TEXT,
+            key_metrics TEXT, thesis TEXT, anti_thesis TEXT, valuation_assumptions TEXT,
+            watchlist_triggers TEXT, last_updated TEXT, UNIQUE(email, ticker)
         )""")
-        
-        try:
-            c.execute("ALTER TABLE dossiers ADD COLUMN scorecard TEXT")
-        except Exception:
-            pass 
+        try: c.execute("ALTER TABLE dossiers ADD COLUMN scorecard TEXT")
+        except Exception: pass 
             
+        conn.commit(); conn.close()
+    except Exception: pass
+
+# --- NEW: TIER MANAGEMENT FUNCTIONS ---
+def get_user_tier(email):
+    if not email: return "Free"
+    if email.lower() in SUPER_USERS: return "Ultra"
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db"); c = conn.cursor()
+        c.execute("SELECT tier FROM subscriptions WHERE email=?", (email.lower(),))
+        row = c.fetchone()
+        conn.close()
+        if row: return row[0]
+        return "Free" # Default if not found
+    except Exception: return "Free"
+
+def set_user_tier(email, tier):
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db"); c = conn.cursor()
+        c.execute("INSERT INTO subscriptions (email, tier) VALUES (?, ?) ON CONFLICT(email) DO UPDATE SET tier=excluded.tier", (email.lower(), tier))
         conn.commit(); conn.close()
     except Exception: pass
 
@@ -617,9 +634,30 @@ with st.sidebar:
     auth_pass = st.text_input("Admin Password", type="password")
     if auth_pass == st.secrets.get("ADMIN_PASSWORD", ""):
         st.success("Authenticated")
+        
+        # --- NEW: TIER MANAGER UI ---
+        st.markdown("### 👑 Manage User Tiers")
+        upgrade_email = st.text_input("User Email to Upgrade:")
+        new_tier = st.selectbox("Select Tier:", ["Free", "Pro", "Ultra"])
+        if st.button("Update User Tier"):
+            if upgrade_email:
+                set_user_tier(upgrade_email, new_tier)
+                st.success(f"Successfully updated {upgrade_email} to {new_tier} tier!")
+        
+        st.markdown("---")
+        st.markdown("### 📥 Lead Database")
         try:
-            conn = sqlite3.connect("users.db"); df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
-            st.dataframe(df, use_container_width=True); st.download_button("📥 Export CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
+            conn = sqlite3.connect("users.db")
+            # Show subscriptions merged with leads
+            df_subs = pd.read_sql_query("SELECT * FROM subscriptions", conn)
+            if not df_subs.empty:
+                st.caption("Active Subscriptions")
+                st.dataframe(df_subs, use_container_width=True)
+            
+            df = pd.read_sql_query("SELECT * FROM leads ORDER BY id DESC", conn)
+            st.caption("Recent App Usage")
+            st.dataframe(df, use_container_width=True)
+            st.download_button("📥 Export Leads CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
             conn.close()
         except Exception: pass
 
@@ -1010,18 +1048,39 @@ with tab1:
             st.stop()
 
         # Check if the user selected a paid podcast tier
-        is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "👑" in podcast_tier)
+        user_tier = get_user_tier(user_email_clean)
         num_requested = len(selected_prompts)
 
+        # --- THE PAYWALL GATEKEEPER ---
         if not is_super_user:
-            p_runs, p_reps, s_reps = get_usage(user_email_clean)
-            if is_premium_request:
-                if p_runs >= 4: st.error("🛑 You have exhausted your 4 Premium runs. Pro and Ultra podcasts require a Premium run."); st.stop()
-                if p_reps + num_requested > 6: st.error(f"🛑 You requested {num_requested} Premium reports, but only have {max(0, 6 - p_reps)} remaining for the next 48 hours."); st.stop()
-            else:
-                if s_reps + num_requested > 30: st.error(f"🛑 You requested {num_requested} Standard reports, but only have {max(0, 30 - s_reps)} remaining for the next 48 hours."); st.stop()
+            # 1. Enforce AI Engine & Tool Restrictions
+            if selected_brain == "gemini-3.1-pro-preview" and user_tier == "Free":
+                st.error("🛑 **Premium Feature:** The Gemini 3.1 Pro reasoning engine requires a **Pro** or **Ultra** subscription. Please upgrade to unlock Wall Street-level analysis.")
+                st.stop()
+                
+            if tool_choice == "Deep Research" and user_tier == "Free":
+                st.error("🛑 **Premium Feature:** Deep Research web grounding requires a **Pro** or **Ultra** subscription. Please upgrade.")
+                st.stop()
+                
+            # 2. Enforce Podcast Restrictions
+            if "Pro Tier" in podcast_tier and user_tier == "Free":
+                st.error("🎙️ **Premium Audio:** The 10-Minute Deep Dive Podcast requires a **Pro** or **Ultra** subscription. Please upgrade your account to generate this audio.")
+                st.stop()
+                
+            if "Ultra Tier" in podcast_tier and user_tier in ["Free", "Pro"]:
+                st.error("👑 **Ultra Feature:** The 20-Minute Institutional Masterclass Podcast is an exclusive feature for **Ultra** subscribers. Please upgrade your account.")
+                st.stop()
 
-        log_usage(user_email_clean, is_premium_request, num_requested)
+            # 3. Enforce Abuse/Bot Quotas (To protect your API costs even for paid users)
+            p_runs, p_reps, s_reps = get_usage(user_email_clean)
+            if user_tier in ["Pro", "Ultra"]:
+                if p_runs >= 10: st.error("🛑 Fair Use Limit: You have hit the maximum of 10 Premium runs for the last 48 hours to protect server load."); st.stop()
+            else: # Free Users
+                if s_reps + num_requested > 15: st.error(f"🛑 Free Tier Limit: You only have {max(0, 15 - s_reps)} standard reports remaining for the next 48 hours."); st.stop()
+
+        # Log usage to track API load
+        is_premium_run = (user_tier in ["Pro", "Ultra"])
+        log_usage(user_email_clean, is_premium_run, num_requested)
         safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
         save_lead(user_email_clean, safe_ticker)
 
