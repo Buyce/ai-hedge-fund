@@ -934,31 +934,37 @@ with tab1:
             global_tasks[email]["scorecard"] = None
 
         audio_bytes = None
+        audio_bytes = None
         if gen_audio and "ELEVENLABS_API_KEY" in st.secrets:
-            # We pass podcast_tier through the function arguments (handled in Step 3)
-            tier_name = podcast_tier.split('(')[0].strip() if podcast_tier else "Podcast"
-            update_task_progress(email, 0.89, f"Stage 3: Writing {tier_name} Script...")
+            tier_name = podcast_tier.split('(')[0].strip() if podcast_tier else "Free Tier"
+            
+            # Determine the exact tier key for the dictionary
+            if "Ultra" in tier_name: tier_key = "Ultra"
+            elif "Pro" in tier_name: tier_key = "Pro"
+            else: tier_key = "Free"
+                
+            update_task_progress(email, 0.89, f"Stage 3: Writing {tier_key} Script...")
             try:
-                if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"]
-                elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"]
-                elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"]
-                else: active_persona = PODCAST_PROMPTS["Concept"]
+                # Grab the correct nested prompt based on the user's tier
+                if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"][tier_key]
+                elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"][tier_key]
+                elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"][tier_key]
+                else: active_persona = PODCAST_PROMPTS["Concept"][tier_key]
 
-                # 1. Strip the old hardcoded length from the prompt
-                active_persona = active_persona.replace("Length: approx 600 words.", "")
-
-                # 2. Inject the dynamic length constraints
+                # Inject the dynamic length constraints to force the LLM to obey the word count
                 length_instructions = {
-                    "Free Tier (~5-6 Minutes / General Overview)": "CRITICAL LENGTH TARGET: Write a minimum of 900 words (approx 5-6 minutes of spoken audio). Build a solid 4-part conversation.",
-                    "Pro Tier (~10 Minutes / Deep Dive) 👑": "CRITICAL LENGTH TARGET: Write a minimum of 1600 words (approx 10 minutes of spoken audio). DO NOT SUMMARIZE QUICKLY. Expand heavily on the data, debate the specific metrics, and build a deep 5-part conversation.",
-                    "Ultra Tier (~20 Minutes / Masterclass) 👑": "CRITICAL LENGTH TARGET: Write a minimum of 3200 words (approx 20 minutes of spoken audio). THIS IS A MASTERCLASS. You must write an extremely long, exhaustive, line-by-line breakdown. Leave no metric un-discussed. Dive deeply into the bull vs bear thesis, historical context, and valuation scenarios. Use a 6-part exhaustive structure."
+                    "Free": "CRITICAL LENGTH TARGET: Write a minimum of 900 words (approx 5-6 minutes of spoken audio). Build a solid conversation based on the FLOW outline.",
+                    "Pro": "CRITICAL LENGTH TARGET: Write a minimum of 1600 words (approx 10 minutes of spoken audio). DO NOT SUMMARIZE QUICKLY. Expand heavily on the data and build a deep conversation based on the FLOW outline.",
+                    "Ultra": "CRITICAL LENGTH TARGET: Write a minimum of 3200 words (approx 20 minutes of spoken audio). THIS IS A MASTERCLASS. You must write an extremely long, exhaustive, line-by-line breakdown based on the FLOW outline. Leave no metric un-discussed."
                 }
-                length_constraint = length_instructions.get(podcast_tier, length_instructions["Free Tier (~5-6 Minutes / General Overview)"])
+                length_constraint = length_instructions[tier_key]
 
                 pod_context = "\n\n".join([f"=== {k} ===\n{v}" for k, v in final_user_reports.items()])
+                
+                # Now it safely replaces the text because active_persona is a clean String, not a Dict
                 pod_instr = (active_persona.replace("[Company_name]", resolved_company).replace("[Industry Name]", industry).replace("{{CEO Name}}", resolved_ceo).replace("{CONCEPT NAME}", concept))
                 
-                # Combine it all into the final prompt
+                # Combine it all into the final prompt payload
                 prompt_payload = f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\n{length_constraint}\n\nDATA:\n{pod_context}"
                 
                 res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt_payload)
