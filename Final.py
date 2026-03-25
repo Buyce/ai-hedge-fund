@@ -496,64 +496,106 @@ VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candida
 }
 
 PODCAST_PROMPTS = {
-    "Company": """ROLE: You are the scriptwriter for the B.E Research Investing Podcast.
-Focus: Explain [Company_name] like professional equity analysts. Base everything on the provided research.
-FORMATTING RULES (CRITICAL):
-- You MUST write this as a dialogue between two hosts.
-- Format every single line starting strictly with either '[Host A]:' or '[Host B]:'.
-- Host A (Adam) is the sharp, analytical lead host. Host B (Rachel) is the curious co-host who adds color commentary, asks good questions, and reacts.
-- Make it sound incredibly human. Use filler words like 'um', 'you know', 'exactly', and 'wow'. Let them naturally interrupt or agree with each other.
-- DO NOT use headers, bullet points, or list numbers. Write only spoken dialogue. Length: approx 600 words.
-
+    "Company": {
+        "Free": """ROLE: You are two world-class financial analysts hosting the B.E Research "Deep Dive" Podcast.
+FOCUS: Explain [Company_name] to long-term investors. Base everything on the provided research.
+FORMATTING RULES: Write strictly as dialogue between [Host A]: (Adam, analytical lead) and [Host B]: (Rachel, curious co-host). Use human filler words ('um', 'exactly'). NO headers or bullet points.
+TONE: Conversational yet analytical. Use simple analogies without losing precision.
 FLOW:
-1. Banter/Opening: Hook the listener on what [Company_name] does.
-2. The Moat & Mechanics: Host A explains how they actually make money. Host B reacts to the margins.
-3. The Risks: Host B asks what could go wrong. Host A breaks down the biggest red flags.
-4. Final Verdict: A quick back-and-forth on the final investment rating.""",
+1. Context & Industry: A one-line summary of what they do, the problem they solve, and their market position.
+2. The Economic Engine: Host A breaks down exactly how they make money (who pays, how pricing works).
+3. Competitive Edge & Risks: Host B asks about the moat and emerging threats. 
+4. The Bottom Line: One clear sentence an investor could repeat on why it compounds or breaks.""",
 
-    "Industry": """ROLE: You are the scriptwriter for the B.E Research Macro Strategy Podcast.
-Focus: Explain the [Industry Name] industry landscape based on the provided research.
-FORMATTING RULES (CRITICAL):
-- You MUST write this as a dialogue between two hosts.
-- Format every single line starting strictly with either '[Host A]:' or '[Host B]:'.
-- Host A (Adam) is the data-driven macro strategist. Host B (Rachel) is the curious co-host asking the 'so what?' questions.
-- Make it sound incredibly human. Use filler words like 'um', 'you know', 'exactly', and 'wow'.
-- DO NOT use headers, bullet points, or list numbers. Write only spoken dialogue. Length: approx 600 words.
+        "Pro": """ROLE: You are two world-class financial analysts hosting the B.E Research "Deep Dive" Podcast.
+FOCUS: A rigorous fundamental analysis of [Company_name]. 
+FORMATTING RULES: Dialogue between [Host A]: (Adam, sharp portfolio manager) and [Host B]: (Rachel, skeptical analyst). Natural interruptions. NO headers.
+TONE: Intellectually curious. Use industry-standard terminology (EBITDA, ROIC, TAM, Operating Leverage) but explain the implications. Anchor on real numbers.
+FLOW (5-PART STRUCTURE):
+1. Industry Landscape: The macro tailwinds/headwinds and where [Company_name] fits in the value chain.
+2. Deep Business Model: Step-by-step breakdown of their largest revenue and profit engines. 
+3. Revenue Quality & Margins: Discuss recurring vs one-off revenue, and what drives their operating margins (volume vs pricing).
+4. Capital Allocation & Cash Flow: How are they deploying cash? (M&A, buybacks, Capex).
+5. Bear vs. Bull: Debate the valuation, regulatory threats, and execution risks vs. the growth catalysts. Final takeaway for allocators.""",
 
+        "Ultra": """ROLE: You are two world-class financial analysts hosting a private, boardroom-level briefing on [Company_name] for institutional insiders.
+FOCUS: An exhaustive, masterclass-level breakdown. Look for "hidden gems" in the footnotes and nuances in management guidance.
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Master Portfolio Manager) and [Host B]: (Rachel, Forensic CPA). Intense, data-heavy debate. Natural interruptions and overlapping thoughts. NO headers.
+TONE: Grounded, no-fluff, highly analytical. Maintain a smooth narrative arc from industry context to deep financials.
+CRITICAL MANDATE: You MUST identify the company's sector and apply the correct KPIs:
+- If Tech/SaaS: Focus on ARR, Churn, LTV/CAC, and R&D efficiency.
+- If Retail/E-Com: Focus on GMV, Fulfillment Costs, Last-Mile logistics, and CAC.
+- If Fintech: Focus on TPV, Take Rates, Payment Rails, and KYC/AML regulatory risks.
+- If Biotech: Focus on the Clinical Pipeline (Phase I/II/III), Cash Runway, and Patent Cliffs.
+- If Energy/Industrials: Focus on CAPEX efficiency, LCOE, and structural macro policy (e.g., subsidies/tariffs).
+
+FLOW (EXHAUSTIVE 8-PART MASTERCLASS):
+1. The Big Picture: The structural thesis and why the market is currently mispricing [Company_name].
+2. Industrial Context: Market share shifts, regulatory capture, and supply chain constraints.
+3. Deep Economic Engine: How cash flows through the system. Explicitly break down Unit Economics using the exact industry KPIs listed above.
+4. Revenue Quality & Profitability: Analyze volume vs. pricing power. Deconstruct gross and operating margins. Is growth organic or acquired?
+5. Capital Intensity & Reality Cash Flow: Host B tears apart the cash conversion cycle, working capital needs, and maintenance vs. growth Capex.
+6. Strategic Priorities: Evaluate management's capital allocation track record (ROIC generation vs value destruction).
+7. The Pre-Mortem (Bear vs Bull): If this stock goes to zero in 5 years, what broke it? (Debt walls, competition, switching costs).
+8. Valuation & Bottom Line: Debate the implied DCF growth rates, exit multiples, and the final asymmetric risk/reward verdict."""
+    },
+
+    "Industry": {
+        "Free": """ROLE: Scriptwriter for B.E Research Macro Podcast. Focus: Explain the [Industry Name] landscape.
+FORMATTING RULES: Dialogue between [Host A]: (Adam) and [Host B]: (Rachel). NO headers. 
 FLOW:
-1. Banter/Opening: Why this industry is shifting right now.
-2. Profit Pools: Host A explains where the money is migrating.
-3. Disruption: Host B asks who the real threat is. Host A explains the chokepoints.
-4. Final Takeaway: The bull and bear case.""",
+1. The Macro Shift: Why [Industry Name] is at an inflection point right now.
+2. Profit Pools: Where is the economic value migrating?
+3. Disruption & Chokepoints: Who holds the real leverage?
+4. Verdict: The Base and Bear case scenarios.""",
 
-    "CEO": """ROLE: You are the scriptwriter for the B.E Research Corporate Governance Podcast.
-Focus: Put {{CEO Name}} of [Company_name] under a microscope.
-FORMATTING RULES (CRITICAL):
-- You MUST write this as a dialogue between two hosts.
-- Format every single line starting strictly with either '[Host A]:' or '[Host B]:'.
-- Host A (Adam) is the ruthless activist investor. Host B (Rachel) is the skeptical co-host.
-- Make it sound incredibly human. Use filler words like 'um', 'you know', 'exactly'.
-- DO NOT use headers, bullet points, or list numbers. Length: approx 600 words.
-
+        "Pro": """ROLE: Scriptwriter for B.E Research Macro Podcast. Focus: Deep sector intelligence on [Industry Name].
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Macro Strategist) and [Host B]: (Rachel, Industry Insider). NO headers. 
 FLOW:
-1. Banter/Opening: Introduce {{CEO Name}} and their archetype.
-2. Track Record: Host A rips into their past capital allocation and ROIC.
-3. Skin in the Game: Host B asks if they actually own the stock.
-4. Final Verdict: Are they a compounder or an empire-builder?""",
+1. The Macro Regime: How rates, inflation, and demographics are shaping the TAM.
+2. Core Economics: Fixed vs variable costs and capital intensity of the sector.
+3. Ecosystem Map: Break down the value chain from raw materials to end-users. 
+4. Incumbents vs Disruptors: Which legacy profit pools are being destroyed?
+5. Strategic Allocation: How should an investor position themselves over a 5-year horizon?""",
 
-    "Concept": """ROLE: You are the scriptwriter for the B.E Research Investing 101 Podcast.
-Focus: Explain the financial concept '{CONCEPT NAME}' to an everyday investor.
-FORMATTING RULES (CRITICAL):
-- You MUST write this as a dialogue between two hosts.
-- Format every single line starting strictly with either '[Host A]:' or '[Host B]:'.
-- Host A (Adam) is the smart professor. Host B (Rachel) is the everyday investor trying to learn.
-- Make it sound incredibly human. Use filler words like 'um', 'make sense', 'ah'.
-- DO NOT use headers or bullet points. Length: approx 600 words.
-
+        "Ultra": """ROLE: Scriptwriter for B.E Research Macro Podcast. Focus: An institutional masterclass on [Industry Name].
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Global Strategist) and [Host B]: (Rachel, Supply Chain Expert). NO headers. 
 FLOW:
-1. The Truth: Host A gives a simple analogy for {CONCEPT NAME}.
-2. The Mechanics: Host B asks how Wall Street actually uses it.
-3. The Bullshit Test: Host A warns how management teams manipulate this metric to lie to investors."""
+1. Historical Context: Structural shifts vs cyclical noise.
+2. Geopolitics & Regulation: Tariffs, subsidies, and ESG mandates altering the landscape.
+3. Granular Unit Economics: Masterclass on operating leverage and margin compression within the sector.
+4. Value Chain Chokepoints: Identify the monopolies or oligopolies controlling the industry's infrastructure.
+5. Cross-Industry Convergence: How software, AI, or biotech is bleeding into this sector.
+6. 10-Year Horizon: The ultimate masterclass projection, assigning probabilities to Bull/Bear scenarios."""
+    },
+
+    "CEO": {
+        "Free": """ROLE: Scriptwriter for B.E Research Governance Podcast. Focus: {{CEO Name}} at [Company_name].
+FORMATTING RULES: Dialogue between [Host A]: (Adam) and [Host B]: (Rachel). NO headers. 
+FLOW: 1. The Archetype (Visionary vs Bureaucrat). 2. Track Record of decisions. 3. Skin in the Game. 4. Final Verdict on alignment.""",
+
+        "Pro": """ROLE: Scriptwriter for B.E Research Governance Podcast. Focus: Deep analysis of {{CEO Name}} at [Company_name].
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Activist Investor) and [Host B]: (Rachel, Skeptical Analyst). NO headers. 
+FLOW: 1. Origin & Archetype. 2. Capital Allocation: Do they create or destroy ROIC? 3. Candor: Promises vs execution on earnings calls. 4. Compensation: Are bonuses tied to real value or manipulated metrics? 5. Verdict.""",
+
+        "Ultra": """ROLE: Scriptwriter for B.E Research Governance Podcast. Focus: Full activist short/long dossier on {{CEO Name}} at [Company_name].
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Activist Board Member) and [Host B]: (Rachel, Corporate Governance Lawyer). NO headers. 
+FLOW: 1. Psychological Archetype & History. 2. Masterclass on Capital Allocation (M&A discipline, ill-timed buybacks). 3. Proxy Statement deep-dive (Unpacking hidden RSUs, insider selling, and misaligned KPI targets). 4. Crisis Management: How they handle macro headwinds. 5. The Activist Verdict: Compounder or Value Destroyer?"""
+    },
+
+    "Concept": {
+        "Free": """ROLE: Scriptwriter for B.E Research 101 Podcast. Focus: '{CONCEPT NAME}'.
+FORMATTING RULES: Dialogue between [Host A]: (Adam) and [Host B]: (Rachel). NO headers. 
+FLOW: 1. The Naked Truth: Simple definition. 2. Real-world analogy. 3. The Bullshit Test (how it's manipulated).""",
+
+        "Pro": """ROLE: Scriptwriter for B.E Research 101 Podcast. Focus: '{CONCEPT NAME}'.
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Professor) and [Host B]: (Rachel, Institutional Analyst). NO headers. 
+FLOW: 1. Core mathematical definition. 2. How hedge funds actually use it. 3. Real-world 10-K examples. 4. Accounting loopholes to watch out for. 5. Takeaways.""",
+
+        "Ultra": """ROLE: Scriptwriter for B.E Research 101 Podcast. Focus: Masterclass on '{CONCEPT NAME}'.
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Director of Research) and [Host B]: (Rachel, Forensic CPA). NO headers. 
+FLOW: 1. Deep mathematical deconstruction. 2. Institutional application and sector-specific variations. 3. Forensic cross-referencing (what other metrics MUST be checked alongside this). 4. Famous historical case studies of manipulation. 5. Complete Masterclass synthesis for analysts."""
+    }
 }
 
 dependent_agents = ["Company - Financial Trajectory & Macro Sensitivity", "Company - Final Investment Memo & Rating"]
