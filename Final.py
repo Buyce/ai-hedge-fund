@@ -842,23 +842,6 @@ with tab1:
             if parsed_dossier:
                 save_dossier(email, resolved_ticker, parsed_dossier, parsed_scorecard)
 
-            update_task_progress(email, 0.86, "Generating Visual Executive Summary...")
-            try:
-                exec_prompt = f"""You are a Senior Analyst. Based ONLY on the following generated research for {resolved_company}, provide a fast executive summary for the user interface.
-FORMAT EXACTLY LIKE THIS:
-### 🚦 Final Verdict: [🟢 BUY, 🟡 HOLD, or 🔴 SELL]
-**Key Takeaways:**
-- [High impact insight 1]
-- [High impact insight 2]
-- [High impact insight 3]
-
-RESEARCH DATA:
-{dossier_context}"""
-                exec_res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=exec_prompt)
-                global_tasks[email]["exec_summary"] = exec_res.text.strip()
-            except Exception:
-                global_tasks[email]["exec_summary"] = None
-
         else:
             global_tasks[email]["exec_summary"] = None
             global_tasks[email]["scorecard"] = None
@@ -1022,13 +1005,7 @@ RESEARCH DATA:
                 with st.expander(f"View Report: {name}"):
                     st.markdown(text)
 
-            # 2. Show the Final Verdict and Scorecard at the Bottom
-            if task.get("exec_summary"):
-                with st.container():
-                    st.markdown("---")
-                    st.markdown(task["exec_summary"])
-                    st.markdown("---")
-                    
+           # 2. Show the Scorecard at the Bottom
             if task.get("scorecard"):
                 display_ui_scorecard(task["scorecard"])
 # ==============================================================================
