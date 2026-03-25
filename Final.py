@@ -708,9 +708,9 @@ with tab1:
             p_runs, p_reps, s_reps = get_usage(user_email_clean)
             st.markdown("##### ⏳ Your 48-Hour Quota Remaining")
             q1, q2, q3 = st.columns(3)
-            q1.metric("Premium Runs", f"{max(0, 4 - p_runs)} / 4")
-            q2.metric("Premium Reports", f"{max(0, 6 - p_reps)} / 6")
-            q3.metric("Standard Reports", f"{max(0, 30 - s_reps)} / 30")
+            q1.metric("Premium Runs", f"{max(0, 3 - p_runs)} / 3")
+            q2.metric("Premium Reports", f"{max(0, 4 - p_reps)} / 4")
+            q3.metric("Standard Reports", f"{max(0, 15 - s_reps)} / 15")
 
     col1, col2 = st.columns(2)
     with col1:
