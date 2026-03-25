@@ -755,7 +755,7 @@ with tab1:
 
     st.markdown("---")
 
-    def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run, gen_audio):
+    def execute_background_job(email, ticker, company, industry, ceo, concept, prompts_to_run, brain_id, tool_id, api_key, email_sender, email_pwd, is_premium_run, gen_audio, podcast_tier):
         update_task_progress(email, 0.05, "Initializing and resolving missing data...")
         client = genai.Client(api_key=api_key)
         reports = {}
@@ -1098,18 +1098,8 @@ with tab1:
             "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
         }
 
-        # IMPORTANT: We also must update the def execute_background_job line at the top to accept podcast_tier!
-        # Because Python functions must match, we pass podcast_tier as a global variable instead to save you from rewriting the whole function header.
-        st.session_state.current_podcast_tier = podcast_tier
-        
-        def execute_job_wrapper(*args):
-            # Hack to sneak the podcast_tier variable into the function without breaking your background worker
-            global podcast_tier 
-            podcast_tier = st.session_state.current_podcast_tier
-            execute_background_job(*args)
-
-        background_executor.submit(execute_job_wrapper, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_request, generate_audio)
-    
+        # Launch the background job with the corrected variables
+        background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)
     if user_email_clean in global_tasks:
         task = global_tasks[user_email_clean]
 
