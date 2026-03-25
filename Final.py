@@ -953,9 +953,9 @@ with tab1:
 
                 # Inject the dynamic length constraints to force the LLM to obey the word count
                 length_instructions = {
-                    "Free": "CRITICAL LENGTH TARGET: Write a minimum of 900 words (approx 5-6 minutes of spoken audio). Build a solid conversation based on the FLOW outline.",
-                    "Pro": "CRITICAL LENGTH TARGET: Write a minimum of 1600 words (approx 10 minutes of spoken audio). DO NOT SUMMARIZE QUICKLY. Expand heavily on the data and build a deep conversation based on the FLOW outline.",
-                    "Ultra": "CRITICAL LENGTH TARGET: Write a minimum of 3200 words (approx 20 minutes of spoken audio). THIS IS A MASTERCLASS. You must write an extremely long, exhaustive, line-by-line breakdown based on the FLOW outline. Leave no metric un-discussed."
+                    "Free": "CRITICAL LENGTH MANDATE: You MUST keep this script strictly UNDER 750 words (approx 4 to 5 minutes of spoken audio). Be extremely concise, punchy, and high-level. DO NOT list endless metrics or over-generate. Wrap up the conversation quickly and naturally.",
+                    "Pro": "CRITICAL LENGTH MANDATE: Target exactly 1500 to 1800 words (approx 10 to 12 minutes of audio). Expand heavily on the data, debate the specific metrics, and build a deep conversation. Do not rush the summary.",
+                    "Ultra": "CRITICAL LENGTH MANDATE: Target 3000+ words (approx 20+ minutes of audio). THIS IS A MASTERCLASS. Write an extremely long, exhaustive, line-by-line breakdown. Leave no metric un-discussed."
                 }
                 length_constraint = length_instructions[tier_key]
 
