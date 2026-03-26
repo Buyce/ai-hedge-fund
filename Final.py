@@ -1284,8 +1284,9 @@ with tab1:
                 global_tasks[user_email_clean]["progress"] = f"CRASH: {str(e)}"
 
         # Launch the background job safely
-        background_executor.submit(safe_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)    if user_email_clean in global_tasks:
-       
+        background_executor.submit(safe_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)
+
+    if user_email_clean in global_tasks:
         task = global_tasks[user_email_clean]
 
         if task["status"] == "running":
