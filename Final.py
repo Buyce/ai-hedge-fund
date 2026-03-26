@@ -509,7 +509,22 @@ OUTPUT STRUCTURE:
 3. CAPITALIZATION TRICKS: Are they aggressively capitalizing expenses (like R&D or software dev) that should be expensed immediately to artificially inflate EBITDA?
 4. OFF-BALANCE SHEET & DEBT RISK: Analyze refinancing walls. Are there looming debt maturities they cannot cover with current Free Cash Flow? Covenants at risk?
 5. ONE-TIME ITEMS: Are "non-recurring" or "restructuring" charges happening every single year?
-VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candidate). Detail the precise mechanism that would trigger a collapse."""
+VERDICT: Flag as GREEN (Clean), YELLOW (Aggressive/Watch), or RED (Short Candidate). Detail the precise mechanism that would trigger a collapse.""",
+
+    "Company - Earnings Call Sentiment & Behavioral Alpha": """ROLE: You are a Forensic Linguistic Analyst and Senior Hedge Fund Portfolio Manager.
+TASK: Use your live search tools to analyze the raw transcript, analyst coverage, and exact quotes from [Company_name]'s MOST RECENT earnings call. 
+CRITICAL MANDATE: Do NOT summarize the financial results. Your sole objective is to extract "Behavioral Alpha" from management's spoken words, specifically focusing on the unscripted Q&A session. Act as a human lie-detector.
+
+OUTPUT STRUCTURE: Use aggressive formatting, bullet points, and exact quotes where possible.
+1. THE NARRATIVE PIVOT: What is the exact story management is trying to force the market to believe this quarter? More importantly, what metric did they focus on last quarter that they conveniently stopped mentioning this quarter?
+2. KPI GOALPOST MOVING: Did management introduce any new "Adjusted" or "Non-GAAP" metrics? Are they trying to change how Wall Street measures their success to mask underlying GAAP deterioration?
+3. THE Q&A INTERROGATION: 
+   - Identify the single hardest or most hostile question asked by an analyst.
+   - Did management answer it with raw data, or did they pivot, deflect, and use a scripted PR response? 
+   - Note any extreme use of hedging language (e.g., "we believe," "navigating macro headwinds," "transitory") versus absolute confidence (e.g., "record demand," "structurally highly profitable").
+4. EXECUTIVE DISSONANCE: Compare the tone of the CEO vs the CFO. Is the CEO selling a massive visionary TAM expansion while the CFO is quietly walking back margin guidance and cutting CapEx? Where is the friction?
+5. THE "UNSAID" REALITY (READING THE TAPE): Based on their excuses, defensive postures, or aggressive confidence, what is the hidden truth about their pricing power, consumer health, or supply chain that they didn't explicitly state?
+6. FINAL BEHAVIORAL VERDICT: Rate the true underlying management sentiment as one of the following: AGGRESSIVELY BULLISH, CAUTIOUSLY OPTIMISTIC, DEFENSIVE, or EVASIVE. Provide a 2-sentence justification for this rating."""
 }
 
 PODCAST_PROMPTS = {
