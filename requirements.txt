@@ -4,3 +4,4 @@ pandas
 google-genai
 markdown
 matplotlib
+xhtml2pdf
