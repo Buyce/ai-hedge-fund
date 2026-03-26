@@ -17,8 +17,6 @@ import requests
 import json                       
 import ast                        
 import re   
-import matplotlib
-matplotlib.use('Agg') # CRITICAL: Forces headless mode, preventing thread deadlocks!
 import matplotlib.pyplot as plt
 import base64
 from email.mime.multipart import MIMEMultipart 
@@ -27,8 +25,7 @@ from email.mime.text import MIMEText
 from email import encoders                     
 from datetime import datetime, timedelta       
 from google import genai                       
-from google.genai import types  
-from xhtml2pdf import pisa
+from google.genai import types                 
 
 # --- 0. SUPER USERS ---
 SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
@@ -1102,63 +1099,39 @@ with tab1:
 
         update_task_progress(email, 0.95, "Compiling ZIP package & Visuals...")
         
+        # --- NEW: INJECT MATPLOTLIB CHARTS INTO THE MASTER SYNTHESIS ---
         target_report = "Master Synthesis - The Institutional Tear Sheet"
-        
+        if target_report in final_user_reports:
+            chart_b64 = generate_financial_chart_base64(resolved_ticker)
+            if chart_b64:
+                # We append an HTML <img> tag using the raw base64 data so it embeds offline!
+                visual_injection = f"\n\n### 📊 Quantitative Visual Data\n<img src='data:image/png;base64,{chart_b64}' width='650' style='border-radius: 8px; box-shadow: 0px 4px 12px rgba(0,0,0,0.1);'/>\n"
+                final_user_reports[target_report] += visual_injection
+
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            
             for name, text in final_user_reports.items():
                 safe_name = name.replace(" ", "_").replace("/", "-")
                 
-                # --- NATIVE HTML EXPORT FOR THE MASTER SYNTHESIS (BULLETPROOF) ---
-                if name == target_report:
-                    # 1. Generate the charts
-                    bar_chart_b64 = generate_financial_chart_base64(resolved_ticker)
-                    radar_chart_b64 = generate_moat_radar_chart_base64()
-                    
-                    # 2. Build a beautiful, self-contained offline HTML Dashboard
-                    html_report = f"""<!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset='utf-8'>
-                        <title>{resolved_ticker} - Master Tear Sheet</title>
-                        <style>
-                            body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1a1a1a; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 40px; background-color: #ffffff; }}
-                            h1 {{ color: #111; border-bottom: 3px solid #2563eb; padding-bottom: 10px; font-size: 28px; }}
-                            h2 {{ color: #1e293b; margin-top: 35px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; font-size: 20px; }}
-                            h3 {{ color: #334155; font-size: 16px; }}
-                            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 13px; }}
-                            th, td {{ border: 1px solid #cbd5e1; padding: 10px; text-align: left; }}
-                            th {{ background-color: #f8fafc; font-weight: bold; }}
-                            .chart-container {{ text-align: center; margin: 40px 0; padding: 30px; background: #0f172a; border-radius: 12px; color: white; }}
-                            .chart-container h2 {{ color: white; border-bottom: 1px solid #334155; }}
-                            .chart-container h3 {{ color: #94a3b8; }}
-                            .chart-img {{ max-width: 100%; height: auto; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }}
-                        </style>
-                    </head>
-                    <body>
-                        {markdown.markdown(text, extensions=["tables", "nl2br"])}
-                        
-                        <div class="chart-container">
-                            <h2>📊 Quantitative Visual Dashboard</h2>
-                    """
-                    
-                    # 3. Safely inject the images
-                    if bar_chart_b64:
-                        html_report += f"<h3>4-Year Financial Trajectory</h3><img class='chart-img' src='data:image/png;base64,{bar_chart_b64}'/><br>"
-                    if radar_chart_b64:
-                        html_report += f"<h3>Competitive Moat Architecture</h3><img class='chart-img' src='data:image/png;base64,{radar_chart_b64}'/>"
-                        
-                    html_report += "</div></body></html>"
-                    
-                    # Save as a .html file instead of a failing .pdf
-                    zip_file.writestr(f"{resolved_ticker}_Master_Tear_Sheet.html", html_report.encode("utf-8"))
-                        
-                # --- STANDARD .DOC EXPORT FOR THE REST OF THE REPORTS ---
-                else:
-                    html_content = markdown.markdown(text, extensions=["tables", "nl2br"])
-                    doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
-                    zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
+                # We add the 'nl2br' extension so Markdown respects new lines properly
+                html_content = markdown.markdown(text, extensions=["tables", "nl2br"])
+                
+                # Wrap the HTML in a clean styling body for the Word Document export
+                doc_content = f"""<html>
+                <head>
+                    <meta charset='utf-8'>
+                    <style>
+                        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                        h1, h2, h3 {{ color: #111; border-bottom: 1px solid #eaeaea; padding-bottom: 5px; }}
+                        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                        th {{ background-color: #f4f4f4; }}
+                    </style>
+                </head>
+                <body>{html_content}</body>
+                </html>"""
+                
+                zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
             if audio_bytes:
                 zip_file.writestr(f"{resolved_ticker}_Premium_Podcast.mp3", audio_bytes)
                 
@@ -1270,19 +1243,8 @@ with tab1:
             "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
         }
 
-        # --- THREAD SAFETY NET ---
-        def safe_background_job(*args):
-            try:
-                execute_background_job(*args)
-            except Exception as e:
-                import traceback
-                print(traceback.format_exc()) # Logs exact error to Streamlit console
-                global_tasks[user_email_clean]["status"] = "error"
-                global_tasks[user_email_clean]["progress"] = f"CRASH: {str(e)}"
-
-        # Launch the background job safely
-        background_executor.submit(safe_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)
-
+        # Launch the background job with the corrected variables
+        background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)
     if user_email_clean in global_tasks:
         task = global_tasks[user_email_clean]
 
@@ -1300,11 +1262,6 @@ with tab1:
 
         elif task["status"] == "complete":
             st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
-        elif task["status"] == "error":
-            st.error(f"❌ **App Crashed in Background:** {task.get('progress')}")
-            if st.button("🔄 Clear Error & Reset"):
-                del global_tasks[user_email_clean]
-                st.rerun()
 
             if task.get("audio_data"):
                 st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
