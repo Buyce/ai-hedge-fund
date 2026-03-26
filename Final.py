@@ -1100,7 +1100,7 @@ with tab1:
                 global_tasks[email]["audio_error"] = str(e)
                 global_tasks[email]["audio_data"] = None
 
-        update_task_progress(email, 0.95, "Compiling ZIP package & Generating PDF...")
+        update_task_progress(email, 0.95, "Compiling ZIP package & Visuals...")
         
         target_report = "Master Synthesis - The Institutional Tear Sheet"
         
@@ -1110,52 +1110,49 @@ with tab1:
             for name, text in final_user_reports.items():
                 safe_name = name.replace(" ", "_").replace("/", "-")
                 
-                # --- PDF GENERATION FOR THE MASTER SYNTHESIS ---
+                # --- NATIVE HTML EXPORT FOR THE MASTER SYNTHESIS (BULLETPROOF) ---
                 if name == target_report:
                     # 1. Generate the charts
                     bar_chart_b64 = generate_financial_chart_base64(resolved_ticker)
                     radar_chart_b64 = generate_moat_radar_chart_base64()
                     
-                    # 2. Build the PDF-specific HTML with injected Base64 images
-                    pdf_html = f"""
+                    # 2. Build a beautiful, self-contained offline HTML Dashboard
+                    html_report = f"""<!DOCTYPE html>
                     <html>
                     <head>
                         <meta charset='utf-8'>
+                        <title>{resolved_ticker} - Master Tear Sheet</title>
                         <style>
-                            @page {{ size: A4; margin: 2cm; }}
-                            body {{ font-family: Helvetica, Arial, sans-serif; font-size: 12px; color: #333; line-height: 1.5; }}
-                            h1 {{ color: #111; border-bottom: 2px solid #111; padding-bottom: 5px; font-size: 20px; }}
-                            h2 {{ color: #2c3e50; font-size: 16px; margin-top: 20px; }}
-                            h3 {{ color: #34495e; font-size: 14px; }}
-                            ul {{ margin-bottom: 15px; }}
-                            li {{ margin-bottom: 5px; }}
-                            .chart-container {{ text-align: center; margin-top: 30px; margin-bottom: 30px; page-break-inside: avoid; }}
+                            body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; color: #1a1a1a; line-height: 1.6; max-width: 900px; margin: 0 auto; padding: 40px; background-color: #ffffff; }}
+                            h1 {{ color: #111; border-bottom: 3px solid #2563eb; padding-bottom: 10px; font-size: 28px; }}
+                            h2 {{ color: #1e293b; margin-top: 35px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; font-size: 20px; }}
+                            h3 {{ color: #334155; font-size: 16px; }}
+                            table {{ border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 13px; }}
+                            th, td {{ border: 1px solid #cbd5e1; padding: 10px; text-align: left; }}
+                            th {{ background-color: #f8fafc; font-weight: bold; }}
+                            .chart-container {{ text-align: center; margin: 40px 0; padding: 30px; background: #0f172a; border-radius: 12px; color: white; }}
+                            .chart-container h2 {{ color: white; border-bottom: 1px solid #334155; }}
+                            .chart-container h3 {{ color: #94a3b8; }}
+                            .chart-img {{ max-width: 100%; height: auto; border-radius: 8px; margin-bottom: 25px; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }}
                         </style>
                     </head>
                     <body>
                         {markdown.markdown(text, extensions=["tables", "nl2br"])}
                         
                         <div class="chart-container">
-                            <h2>Quantitative Visual Dashboard</h2>
+                            <h2>📊 Quantitative Visual Dashboard</h2>
                     """
                     
-                    # Safely inject the images if they generated successfully
+                    # 3. Safely inject the images
                     if bar_chart_b64:
-                        pdf_html += f"<h3>4-Year Financial Trajectory</h3><img src='data:image/png;base64,{bar_chart_b64}' width='500'/><br><br>"
+                        html_report += f"<h3>4-Year Financial Trajectory</h3><img class='chart-img' src='data:image/png;base64,{bar_chart_b64}'/><br>"
                     if radar_chart_b64:
-                        pdf_html += f"<h3>Competitive Moat Architecture</h3><img src='data:image/png;base64,{radar_chart_b64}' width='400'/>"
+                        html_report += f"<h3>Competitive Moat Architecture</h3><img class='chart-img' src='data:image/png;base64,{radar_chart_b64}'/>"
                         
-                    pdf_html += "</div></body></html>"
+                    html_report += "</div></body></html>"
                     
-                    # 3. Compile the HTML directly into a binary PDF using xhtml2pdf
-                    pdf_buffer = io.BytesIO()
-                    pisa_status = pisa.CreatePDF(io.StringIO(pdf_html), dest=pdf_buffer)
-                    
-                    # 4. Save the PDF to the ZIP file
-                    if not pisa_status.err:
-                        zip_file.writestr(f"{resolved_ticker}_Master_Tear_Sheet.pdf", pdf_buffer.getvalue())
-                    else:
-                        print("PDF Generation Error")
+                    # Save as a .html file instead of a failing .pdf
+                    zip_file.writestr(f"{resolved_ticker}_Master_Tear_Sheet.html", html_report.encode("utf-8"))
                         
                 # --- STANDARD .DOC EXPORT FOR THE REST OF THE REPORTS ---
                 else:
