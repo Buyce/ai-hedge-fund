@@ -25,7 +25,8 @@ from email.mime.text import MIMEText
 from email import encoders                     
 from datetime import datetime, timedelta       
 from google import genai                       
-from google.genai import types                 
+from google.genai import types  
+from xhtml2pdf import pisa
 
 # --- 0. SUPER USERS ---
 SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
@@ -1097,41 +1098,68 @@ with tab1:
                 global_tasks[email]["audio_error"] = str(e)
                 global_tasks[email]["audio_data"] = None
 
-        update_task_progress(email, 0.95, "Compiling ZIP package & Visuals...")
+        update_task_progress(email, 0.95, "Compiling ZIP package & Generating PDF...")
         
-        # --- NEW: INJECT MATPLOTLIB CHARTS INTO THE MASTER SYNTHESIS ---
         target_report = "Master Synthesis - The Institutional Tear Sheet"
-        if target_report in final_user_reports:
-            chart_b64 = generate_financial_chart_base64(resolved_ticker)
-            if chart_b64:
-                # We append an HTML <img> tag using the raw base64 data so it embeds offline!
-                visual_injection = f"\n\n### 📊 Quantitative Visual Data\n<img src='data:image/png;base64,{chart_b64}' width='650' style='border-radius: 8px; box-shadow: 0px 4px 12px rgba(0,0,0,0.1);'/>\n"
-                final_user_reports[target_report] += visual_injection
-
+        
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+            
             for name, text in final_user_reports.items():
                 safe_name = name.replace(" ", "_").replace("/", "-")
                 
-                # We add the 'nl2br' extension so Markdown respects new lines properly
-                html_content = markdown.markdown(text, extensions=["tables", "nl2br"])
-                
-                # Wrap the HTML in a clean styling body for the Word Document export
-                doc_content = f"""<html>
-                <head>
-                    <meta charset='utf-8'>
-                    <style>
-                        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
-                        h1, h2, h3 {{ color: #111; border-bottom: 1px solid #eaeaea; padding-bottom: 5px; }}
-                        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                        th {{ background-color: #f4f4f4; }}
-                    </style>
-                </head>
-                <body>{html_content}</body>
-                </html>"""
-                
-                zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
+                # --- PDF GENERATION FOR THE MASTER SYNTHESIS ---
+                if name == target_report:
+                    # 1. Generate the charts
+                    bar_chart_b64 = generate_financial_chart_base64(resolved_ticker)
+                    radar_chart_b64 = generate_moat_radar_chart_base64()
+                    
+                    # 2. Build the PDF-specific HTML with injected Base64 images
+                    pdf_html = f"""
+                    <html>
+                    <head>
+                        <meta charset='utf-8'>
+                        <style>
+                            @page {{ size: A4; margin: 2cm; }}
+                            body {{ font-family: Helvetica, Arial, sans-serif; font-size: 12px; color: #333; line-height: 1.5; }}
+                            h1 {{ color: #111; border-bottom: 2px solid #111; padding-bottom: 5px; font-size: 20px; }}
+                            h2 {{ color: #2c3e50; font-size: 16px; margin-top: 20px; }}
+                            h3 {{ color: #34495e; font-size: 14px; }}
+                            ul {{ margin-bottom: 15px; }}
+                            li {{ margin-bottom: 5px; }}
+                            .chart-container {{ text-align: center; margin-top: 30px; margin-bottom: 30px; page-break-inside: avoid; }}
+                        </style>
+                    </head>
+                    <body>
+                        {markdown.markdown(text, extensions=["tables", "nl2br"])}
+                        
+                        <div class="chart-container">
+                            <h2>Quantitative Visual Dashboard</h2>
+                    """
+                    
+                    # Safely inject the images if they generated successfully
+                    if bar_chart_b64:
+                        pdf_html += f"<h3>4-Year Financial Trajectory</h3><img src='data:image/png;base64,{bar_chart_b64}' width='500'/><br><br>"
+                    if radar_chart_b64:
+                        pdf_html += f"<h3>Competitive Moat Architecture</h3><img src='data:image/png;base64,{radar_chart_b64}' width='400'/>"
+                        
+                    pdf_html += "</div></body></html>"
+                    
+                    # 3. Compile the HTML directly into a binary PDF using xhtml2pdf
+                    pdf_buffer = io.BytesIO()
+                    pisa_status = pisa.CreatePDF(io.StringIO(pdf_html), dest=pdf_buffer)
+                    
+                    # 4. Save the PDF to the ZIP file
+                    if not pisa_status.err:
+                        zip_file.writestr(f"{resolved_ticker}_Master_Tear_Sheet.pdf", pdf_buffer.getvalue())
+                    else:
+                        print("PDF Generation Error")
+                        
+                # --- STANDARD .DOC EXPORT FOR THE REST OF THE REPORTS ---
+                else:
+                    html_content = markdown.markdown(text, extensions=["tables", "nl2br"])
+                    doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
+                    zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
             if audio_bytes:
                 zip_file.writestr(f"{resolved_ticker}_Premium_Podcast.mp3", audio_bytes)
                 
