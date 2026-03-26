@@ -17,6 +17,8 @@ import requests
 import json                       
 import ast                        
 import re   
+import matplotlib
+matplotlib.use('Agg') # CRITICAL: Forces headless mode, preventing thread deadlocks!
 import matplotlib.pyplot as plt
 import base64
 from email.mime.multipart import MIMEMultipart 
@@ -1271,9 +1273,19 @@ with tab1:
             "ticker": safe_ticker, "start_time": time.time(), "estimated_total_seconds": base_time,
         }
 
-        # Launch the background job with the corrected variables
-        background_executor.submit(execute_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)
-    if user_email_clean in global_tasks:
+        # --- THREAD SAFETY NET ---
+        def safe_background_job(*args):
+            try:
+                execute_background_job(*args)
+            except Exception as e:
+                import traceback
+                print(traceback.format_exc()) # Logs exact error to Streamlit console
+                global_tasks[user_email_clean]["status"] = "error"
+                global_tasks[user_email_clean]["progress"] = f"CRASH: {str(e)}"
+
+        # Launch the background job safely
+        background_executor.submit(safe_background_job, user_email_clean, target_ticker, target_company, target_industry, target_ceo, target_concept, selected_prompts, selected_brain, tool_choice, st.secrets["GOOGLE_API_KEY"], st.secrets["EMAIL_SENDER"], st.secrets["EMAIL_PASSWORD"], is_premium_run, generate_audio, podcast_tier)    if user_email_clean in global_tasks:
+       
         task = global_tasks[user_email_clean]
 
         if task["status"] == "running":
@@ -1290,6 +1302,11 @@ with tab1:
 
         elif task["status"] == "complete":
             st.success("✅ Analysis Complete! Files have been emailed and are also available below.")
+        elif task["status"] == "error":
+            st.error(f"❌ **App Crashed in Background:** {task.get('progress')}")
+            if st.button("🔄 Clear Error & Reset"):
+                del global_tasks[user_email_clean]
+                st.rerun()
 
             if task.get("audio_data"):
                 st.markdown("🎧 **Listen to the B.E Research Premium Podcast Summary:**")
