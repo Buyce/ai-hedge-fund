@@ -325,38 +325,73 @@ def display_ui_scorecard(scorecard_data):
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
-    "Master Synthesis - The Institutional Tear Sheet": """ROLE: Lead Investment Committee Chair.
-You are synthesizing multiple institutional-grade analyst reports into ONE cohesive, decision-ready flagship investment report for [Company_name] ([TICKER]).
+    "Master Synthesis - The Institutional Tear Sheet": """ROLE: Chief Investment Officer (CIO) and Master Editor at a Tier-1 Hedge Fund.
+You are tasked with compiling the final "Institutional Master Tear Sheet" for [Company_name] ([TICKER]). 
 
-CRITICAL OBJECTIVE:
-- Eliminate redundancy
-- Extract only the highest-signal insights
-- Build a coherent narrative from first principles
-- Prioritize clarity, synthesis, and decision usefulness over raw detail
+CRITICAL MANDATE: You are a COMPILER, not a summarizer. You have been provided with 10 exhaustive, forensic sub-reports (e.g., Forensic Accounting, 7 Powers Moat, Revenue Decomposition, Earnings Call Sentiment). 
+DO NOT dilute the forensic depth. DO NOT compress the data into generic fluff. Your job is to extract the most aggressive, high-signal paragraphs from the sub-reports and reformat them into the strict 5-Part Narrative Arc below.
 
-DO NOT:
-- Repeat analysis verbatim
-- Dump all content
-- Lose the core thesis
+VISUAL DATA INSTRUCTIONS: You must simulate charts and visual data using advanced Markdown, Emojis, and ASCII block characters (e.g., █ ▓ ▒ ░). Follow the exact visual formatting requested in each section.
 
-DO:
-- Merge overlapping insights
-- Highlight what matters most
-- Add "So what?" interpretation after each section
+FORMAT EXACTLY TO this 5-Part Structure:
 
-OUTPUT STRUCTURE:
-1. EXECUTIVE SUMMARY: Rating, Thesis (3 bullets), Risks (2 bullets)
-2. BUSINESS OVERVIEW: What the company does, how it makes money, core flywheel
-3. ECONOMIC ENGINE: Revenue breakdown (Price vs Volume vs Mix), Growth quality, Margin trends, KEY INSIGHT
-4. MOAT & COMPETITIVE ADVANTAGE: Summary, 7 Powers condensed, Moat direction, What breaks it
-5. MANAGEMENT & CAPITAL ALLOCATION: CEO archetype, Capital allocation quality, Incentive alignment, Verdict
-6. FINANCIAL TRUTH: Balance sheet strength, Earnings quality, Cash flow reality, Traffic light system
-7. RISK FRAMEWORK: Top 3 risks, Failure scenario
-8. MACRO SENSITIVITY: Interest rates, inflation, FX, Conclusion
-9. VALUATION & EXPECTED RETURN: Earnings yield vs bond yield, FCF yield, Bull/Base/Bear
-10. FINAL VERDICT: Clear, decisive conclusion
+# [COMPANY NAME] - INSTITUTIONAL MASTER TEAR SHEET
+**Sector:** [Extract from context] | **Analysis Date:** Current
 
-STYLE: Institutional, Concise but deep, Use bullet points, Avoid fluff. Every section must answer: “Why does this matter for an investor?”""",
+---
+## PAGE 1: EXECUTIVE TEAR SHEET & THE "NOW"
+**Rating & Core Thesis:** [Extract the definitive rating and the 3-bullet core thesis directly from the 'Final Investment Memo' report].
+**Near-Term Catalysts:** [Extract the 2-3 specific catalysts from the 'Final Investment Memo'].
+
+### Earnings Call Behavioral Alpha & Sentiment
+[Extract the exact narrative pivot and Q&A evasion/confidence from the 'Earnings Call Sentiment' report].
+**[VISUAL DATA: SENTIMENT GAUGE]**
+Create a visual ASCII slider from [BEARISH] to [BULLISH] showing management's current tone. 
+Example: BEARISH [░░░███████] BULLISH
+
+---
+## PAGE 2: THE ECONOMIC ENGINE & THE MOAT
+### Deep Business Model Mechanics
+[Extract the exact revenue drivers, unit economics, and customer captivity data from the 'Deep Business Model & Buyout Due Diligence' report].
+
+### Hamilton Helmer's 7 Powers Breakdown
+[Extract the specific analysis from the 'Moat Analysis' report].
+**[VISUAL DATA: MOAT RADAR TABLE]**
+Create a clean Markdown table scoring the 7 Powers (Scale, Network, Counter-Positioning, Switching Costs, Branding, Cornered Resource, Process Power) from 1 to 5, with a 5-word justification for each.
+
+---
+## PAGE 3: FINANCIAL TRAJECTORY & REVENUE QUALITY
+### The Growth Equation (Organic vs Acquired)
+[Extract the aggressive breakdown of Price vs. Volume vs. M&A from the 'Revenue Decomposition & Organic Growth' report].
+
+### Efficiency & Macro Sensitivity
+[Extract the ROIC vs WACC reality and the exact Macro/FX/Rate vulnerabilities from the 'Financial Trajectory & Macro Sensitivity' report].
+**[VISUAL DATA: ORGANIC GROWTH QUALITY]**
+Create a visual Markdown breakdown showing what percentage of growth is true organic volume versus inflationary pricing/M&A.
+
+---
+## PAGE 4: LEADERSHIP, ALIGNMENT, & GOVERNANCE
+### The CEO Archetype & Track Record
+[Extract the capital allocation track record, M&A discipline, and promises vs execution from the 'CEO Track Record' report].
+
+### Skin in the Game & Incentives
+[Extract insider ownership, compensation architecture, and dilution risks from the 'Management Quality & Insider Incentives' report].
+
+---
+## PAGE 5: FORENSICS, SOLVENCY & THE PRE-MORTEM
+### Forensic Accounting Red Flags
+[Extract the exact Working Capital anomalies, DSO spikes, or Capitalization tricks from the 'Forensic Accounting' report. Do not soften the tone.]
+
+### The Fortress Test (Buffett Reality Check)
+[Extract the Balance Sheet and Owner's Earnings breakdown from the 'Warren Buffett Breakdown' report].
+**[VISUAL DATA: SOLVENCY TRAFFIC LIGHT MATRIX]**
+Create a visual matrix using Emojis (🟢 Clean, 🟡 Watch, 🔴 Danger) for the following categories:
+- Earnings Quality: [Emoji] - [1-sentence reason]
+- Balance Sheet Solvency: [Emoji] - [1-sentence reason]
+- Cash Conversion: [Emoji] - [1-sentence reason]
+
+### The Pre-Mortem (Terminal Risk)
+[Extract the exact "Obituary" / Terminal Risk scenario from the 'Buyout Due Diligence' and 'Final Memo' reports. How does this company die in 5 years?]""",
     
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
