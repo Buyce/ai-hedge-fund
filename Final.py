@@ -324,6 +324,40 @@ def display_ui_scorecard(scorecard_data):
 # ==============================================================================
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
+    # --- DEPENDENT AGENTS (SYNTHESIS) ---
+    "Master Synthesis - The Institutional Tear Sheet": """ROLE: Lead Investment Committee Chair.
+You are synthesizing multiple institutional-grade analyst reports into ONE cohesive, decision-ready flagship investment report for [Company_name] ([TICKER]).
+
+CRITICAL OBJECTIVE:
+- Eliminate redundancy
+- Extract only the highest-signal insights
+- Build a coherent narrative from first principles
+- Prioritize clarity, synthesis, and decision usefulness over raw detail
+
+DO NOT:
+- Repeat analysis verbatim
+- Dump all content
+- Lose the core thesis
+
+DO:
+- Merge overlapping insights
+- Highlight what matters most
+- Add "So what?" interpretation after each section
+
+OUTPUT STRUCTURE:
+1. EXECUTIVE SUMMARY: Rating, Thesis (3 bullets), Risks (2 bullets)
+2. BUSINESS OVERVIEW: What the company does, how it makes money, core flywheel
+3. ECONOMIC ENGINE: Revenue breakdown (Price vs Volume vs Mix), Growth quality, Margin trends, KEY INSIGHT
+4. MOAT & COMPETITIVE ADVANTAGE: Summary, 7 Powers condensed, Moat direction, What breaks it
+5. MANAGEMENT & CAPITAL ALLOCATION: CEO archetype, Capital allocation quality, Incentive alignment, Verdict
+6. FINANCIAL TRUTH: Balance sheet strength, Earnings quality, Cash flow reality, Traffic light system
+7. RISK FRAMEWORK: Top 3 risks, Failure scenario
+8. MACRO SENSITIVITY: Interest rates, inflation, FX, Conclusion
+9. VALUATION & EXPECTED RETURN: Earnings yield vs bond yield, FCF yield, Bull/Base/Bear
+10. FINAL VERDICT: Clear, decisive conclusion
+
+STYLE: Institutional, Concise but deep, Use bullet points, Avoid fluff. Every section must answer: “Why does this matter for an investor?”""",
+    
     "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
 Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
 TASKS:
@@ -630,7 +664,7 @@ FLOW: 1. Deep mathematical deconstruction. 2. Institutional application and sect
     }
 }
 
-dependent_agents = ["Company - Financial Trajectory & Macro Sensitivity", "Company - Final Investment Memo & Rating"]
+dependent_agents = ["Master Synthesis - The Institutional Tear Sheet", "Company - Financial Trajectory & Macro Sensitivity", "Company - Final Investment Memo & Rating"]
 industry_agents = [k for k in gem_prompts.keys() if "Industry" in k]
 concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
@@ -1072,25 +1106,33 @@ with tab1:
         if needs_ceo and not target_ceo.strip(): missing_fields.append("**CEO's Name**")
         if needs_concept and not target_concept.strip(): missing_fields.append("**Financial Concept**")
 
-        if missing_fields:
-            st.error(f"🛑 **Action Required:** To generate your selected reports, please provide the following missing information: {', '.join(missing_fields)}")
-            st.stop()
-
+        # Fetch user tier
         user_tier = get_user_tier(user_email_clean)
         num_requested = len(selected_prompts)
-        p_runs, p_reps, s_reps = get_usage(user_email_clean)
 
-        # --- THE FREEMIUM GATEKEEPER ---
+        # --- THE STRICT FREEMIUM GATEKEEPER ---
         if not is_super_user:
-            # 1. Enforce Ultra-Exclusive Features (No free trials for Ultra)
+            
+            # 1. Enforce the Free Tier 2-Report Limit
+            if user_tier == "Free" and num_requested > 2:
+                st.error("🛑 **Free Tier Limit:** Free accounts can only generate up to 2 reports per run. Please upgrade to **Pro** or **Ultra** to run a comprehensive 10-report institutional deep-dive.")
+                st.stop()
+                
+            # 2. Lock the Master Tear Sheet
+            if "Master Synthesis - The Institutional Tear Sheet" in selected_prompts and user_tier == "Free":
+                st.error("👑 **Premium Feature:** The Master Synthesis Tear Sheet is an exclusive feature for **Pro** and **Ultra** subscribers. It synthesizes multiple deep-dives into a single flagship report. Please upgrade to unlock.")
+                st.stop()
+
+            # 3. Enforce Ultra-Exclusive Podcast Features
             if "Ultra Tier" in podcast_tier and user_tier in ["Free", "Pro"]:
                 st.error("👑 **Ultra Feature:** The 20-Minute Institutional Masterclass Podcast is an exclusive feature for **Ultra** subscribers. Please upgrade your account.")
                 st.stop()
                 
             # Define what counts as a Premium Request
-            is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "Pro Tier" in podcast_tier)
+            is_premium_request = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "Pro Tier" in podcast_tier or "Master Synthesis" in str(selected_prompts))
             
-            # 2. Freemium Quotas (Free users get a taste of Pro features)
+            # 4. Freemium Quotas (Free users get a taste of Pro features, but max 2 reports)
+            p_runs, p_reps, s_reps = get_usage(user_email_clean)
             if user_tier == "Free":
                 if is_premium_request:
                     if p_runs >= 3: 
@@ -1104,14 +1146,14 @@ with tab1:
                         st.error(f"🛑 **Free Tier Limit:** You only have {max(0, 15 - s_reps)} standard reports remaining for the next 48 hours. Upgrade for unlimited access.")
                         st.stop()
                         
-            # 3. Paid User Fair Use Quotas (To protect server costs)
+            # 5. Paid User Fair Use Quotas (To protect server costs)
             elif user_tier in ["Pro", "Ultra"]:
                 if p_runs >= 10: 
                     st.error("🛑 Fair Use Limit: You have hit the maximum of 10 Premium runs for the last 48 hours to protect server load.")
                     st.stop()
 
         # Log usage to track API load
-        is_premium_run = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "👑" in podcast_tier)
+        is_premium_run = (selected_brain == "gemini-3.1-pro-preview" or tool_choice == "Deep Research" or "👑" in podcast_tier or "Master Synthesis" in str(selected_prompts))
         log_usage(user_email_clean, is_premium_run, num_requested)
         
         safe_ticker = target_ticker.strip().upper() if target_ticker.strip() else "General_Report"
