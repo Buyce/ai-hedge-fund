@@ -413,6 +413,18 @@ FORMAT EXACTLY TO THIS STRUCTURE:
 ## 6. FINAL RESEARCH CONCLUSION
 [Provide a final, 3-sentence objective conclusion weighing the asymmetric risk/reward of the equity at current valuations.]""",
 
+ "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
+Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
+TASKS:
+1. FINANCIAL TRAJECTORY: Analyze the 3-5 year trend for Revenue, Gross Margins, Operating Margins (EBIT), and Net Income. Are margins expanding or compressing? Why?
+2. CASH & CAPITAL ALLOCATION: Evaluate Free Cash Flow (FCF) generation. How is management deploying capital? (Are they hoarding cash, paying dividends, buying back shares, or aggressively doing M&A/Capex?)
+3. MACRO SENSITIVITY (The "Macro" in Macro Understanding): Explicitly define how sensitive [STOCK NAME] is to current macroeconomic factors. 
+- Interest Rates: How does the cost of capital affect their debt load or customer demand?
+- Inflation/Pricing Power: Can they pass rising costs to consumers without losing volume?
+- FX/Geopolitics: What is their exposure to currency fluctuations or supply chain shocks?
+4. ROIC & EFFICIENCY: Assess their Return on Invested Capital (ROIC) vs their Weighted Average Cost of Capital (WACC) if data allows. Are they actually creating value, or just growing for the sake of growth?
+OUTPUT FORMAT: Use heavy formatting, bullet points, and bold text for readability. Output the *story* those numbers tell. End with a 1-sentence "Financial Health Verdict".""",
+    
     "Company - Final Investment Memo & Rating": """ROLE: You are the Lead Portfolio Manager and Senior Equity Analyst covering [STOCK NAME] ([TICKER]).
 You are synthesizing all provided research into a final, actionable investment memo. 
 CRITICAL RULES:
