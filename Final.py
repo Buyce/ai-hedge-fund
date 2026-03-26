@@ -16,7 +16,9 @@ import markdown
 import requests                   
 import json                       
 import ast                        
-import re                         
+import re   
+import matplotlib.pyplot as plt
+import base64
 from email.mime.multipart import MIMEMultipart 
 from email.mime.base import MIMEBase           
 from email.mime.text import MIMEText           
@@ -295,7 +297,52 @@ def fetch_trending_market_pulse(api_key):
         )
         return res.text
     except Exception as e: return f"Could not fetch trending stocks at this moment. (Error: {str(e)})"
+def generate_financial_chart_base64(ticker):
+    """Fetches 4 years of live data and generates a sleek, base64 encoded Matplotlib chart."""
+    try:
+        stock = yf.Ticker(ticker)
+        fin = stock.financials
+        if fin.empty: return None
+        
+        # Get the last 4 years and reverse for chronological order
+        dates = fin.columns[:4][::-1]
+        
+        # Safely extract Revenue and Net Income in Billions
+        revs = [fin.loc['Total Revenue', d]/1e9 if 'Total Revenue' in fin.index else 0 for d in dates]
+        net_incomes = [fin.loc['Net Income', d]/1e9 if 'Net Income' in fin.index else 0 for d in dates]
+        years = [str(d.year) for d in dates]
 
+        # --- STYLE THE CHART TO LOOK LIKE A PREMIUM HEDGE FUND DECK ---
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        
+        x = range(len(years))
+        width = 0.35
+        
+        # Draw the bars (Blue for Revenue, Green for Profit)
+        ax.bar([i - width/2 for i in x], revs, width=width, label='Revenue ($B)', color='#1f77b4', edgecolor='white', linewidth=0.5)
+        ax.bar([i + width/2 for i in x], net_incomes, width=width, label='Net Income ($B)', color='#2ca02c', edgecolor='white', linewidth=0.5)
+        
+        # Formatting
+        ax.set_xticks(x)
+        ax.set_xticklabels(years, fontsize=10, fontweight='bold')
+        ax.set_title(f"{ticker.upper()} - 4 Year Financial Trajectory", fontsize=14, fontweight='bold', pad=15)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.3)
+        ax.legend(loc='upper left', frameon=False)
+        
+        plt.tight_layout()
+
+        # Save to a bytes buffer and encode to Base64
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=200, bbox_inches='tight', transparent=True)
+        plt.close(fig)
+        
+        return base64.b64encode(buf.getvalue()).decode('utf-8')
+    except Exception as e:
+        print(f"Chart generation failed: {e}")
+        return None
 def display_ui_scorecard(scorecard_data):
     if not scorecard_data or not isinstance(scorecard_data, dict):
         return
@@ -324,86 +371,47 @@ def display_ui_scorecard(scorecard_data):
 # ==============================================================================
 gem_prompts = {
     # --- DEPENDENT AGENTS (SYNTHESIS) ---
-    # --- DEPENDENT AGENTS (SYNTHESIS) ---
-    "Master Synthesis - The Institutional Tear Sheet": """ROLE: Chief Investment Officer (CIO) and Master Editor at a Tier-1 Hedge Fund.
-You are tasked with compiling the final "Institutional Master Tear Sheet" for [Company_name] ([TICKER]). 
+    "Master Synthesis - The Institutional Tear Sheet": """ROLE: Director of Research at a Tier-1 Long/Short Institutional Equity Fund.
+TASK: Synthesize the 10 provided forensic sub-reports into a flagship "Initiation of Coverage" Master Tear Sheet for [Company_name] ([TICKER]).
 
-CRITICAL MANDATE: You are a COMPILER, not a summarizer. You have been provided with 10 exhaustive, forensic sub-reports (e.g., Forensic Accounting, 7 Powers Moat, Revenue Decomposition, Earnings Call Sentiment). 
-DO NOT dilute the forensic depth. DO NOT compress the data into generic fluff. Your job is to extract the most aggressive, high-signal paragraphs from the sub-reports and reformat them into the strict 5-Part Narrative Arc below.
+CRITICAL INSTRUCTIONS ON TONE & FORMATTING:
+1. ABSOLUTE OBJECTIVITY: Do NOT use sensationalist language (e.g., "terrifying", "catastrophic", "death spiral"). Use cold, probabilistic, institutional terminology.
+2. NO WALLS OF TEXT: You are strictly forbidden from writing paragraphs longer than 3 sentences. You MUST use bullet points heavily. 
+3. BALANCED THESIS: You must accurately reflect both the Bull Case (from the Investment Memo) and the Bear Case (from the Forensic/Pre-Mortem reports). Do not let one overpower the other.
+4. PROFESSIONAL STYLING: Do NOT use emojis, ASCII art, or fake text-based sliders. Use clean Markdown headers, bold text for key metrics, and crisp lists.
 
-VISUAL DATA INSTRUCTIONS: You must simulate charts and visual data using advanced Markdown, Emojis, and ASCII block characters (e.g., █ ▓ ▒ ░). Follow the exact visual formatting requested in each section.
+FORMAT EXACTLY TO THIS STRUCTURE:
 
-FORMAT EXACTLY TO this 5-Part Structure:
-
-# [COMPANY NAME] - INSTITUTIONAL MASTER TEAR SHEET
-**Sector:** [Extract from context] | **Analysis Date:** Current
-
----
-## PAGE 1: EXECUTIVE TEAR SHEET & THE "NOW"
-**Rating & Core Thesis:** [Extract the definitive rating and the 3-bullet core thesis directly from the 'Final Investment Memo' report].
-**Near-Term Catalysts:** [Extract the 2-3 specific catalysts from the 'Final Investment Memo'].
-
-### Earnings Call Behavioral Alpha & Sentiment
-[Extract the exact narrative pivot and Q&A evasion/confidence from the 'Earnings Call Sentiment' report].
-**[VISUAL DATA: SENTIMENT GAUGE]**
-Create a visual ASCII slider from [BEARISH] to [BULLISH] showing management's current tone. 
-Example: BEARISH [░░░███████] BULLISH
+# INITIATION OF COVERAGE: [COMPANY NAME] ([TICKER])
+**Sector:** [Extract] | **Date:** Current
 
 ---
-## PAGE 2: THE ECONOMIC ENGINE & THE MOAT
-### Deep Business Model Mechanics
-[Extract the exact revenue drivers, unit economics, and customer captivity data from the 'Deep Business Model & Buyout Due Diligence' report].
+## 1. EXECUTIVE SUMMARY & INVESTMENT RATING
+* **Consensus Rating:** [Synthesize the final rating based on the sub-reports]
+* **The Core Thesis:** [Provide a 3-bullet summary of the overarching narrative and market mispricing].
+* **Near-Term Catalysts:** [List 2 specific upcoming events that will move the stock].
 
-### Hamilton Helmer's 7 Powers Breakdown
-[Extract the specific analysis from the 'Moat Analysis' report].
-**[VISUAL DATA: MOAT RADAR TABLE]**
-Create a clean Markdown table scoring the 7 Powers (Scale, Network, Counter-Positioning, Switching Costs, Branding, Cornered Resource, Process Power) from 1 to 5, with a 5-word justification for each.
+## 2. THE BULL CASE (Growth & Moat)
+* **The Economic Flywheel:** [Summarize how their ecosystem feeds itself, extracting from the Business Model report].
+* **Competitive Moat (7 Powers):** [Provide 3 bullet points detailing their strongest Hamilton Helmer powers].
+* **Earnings Call Sentiment:** [Summarize management's current tone and confidence].
 
----
-## PAGE 3: FINANCIAL TRAJECTORY & REVENUE QUALITY
-### The Growth Equation (Organic vs Acquired)
-[Extract the aggressive breakdown of Price vs. Volume vs. M&A from the 'Revenue Decomposition & Organic Growth' report].
+## 3. THE BEAR CASE (Risks & Forensics)
+* **Forensic Red Flags:** [List the top 2-3 accounting or working capital concerns found in the Forensic report].
+* **Macro Sensitivities:** [List the specific macro, rate, or FX vulnerabilities].
+* **The Terminal Risk:** [Provide a 2-bullet summary of the exact scenario that breaks the company's business model over the next 5 years].
 
-### Efficiency & Macro Sensitivity
-[Extract the ROIC vs WACC reality and the exact Macro/FX/Rate vulnerabilities from the 'Financial Trajectory & Macro Sensitivity' report].
-**[VISUAL DATA: ORGANIC GROWTH QUALITY]**
-Create a visual Markdown breakdown showing what percentage of growth is true organic volume versus inflationary pricing/M&A.
+## 4. FINANCIAL TRAJECTORY & UNIT ECONOMICS
+* **Revenue Quality:** [Break down organic volume growth vs. inflationary pricing or M&A].
+* **Margin & Capital Efficiency:** [Detail the ROIC trajectory and operating margin trends. Explain WHY margins are compressing or expanding].
+* **The Fortress Test:** [Provide 2 bullet points on balance sheet health, debt walls, and true free cash flow generation].
 
----
-## PAGE 4: LEADERSHIP, ALIGNMENT, & GOVERNANCE
-### The CEO Archetype & Track Record
-[Extract the capital allocation track record, M&A discipline, and promises vs execution from the 'CEO Track Record' report].
+## 5. MANAGEMENT & GOVERNANCE
+* **Capital Allocation:** [Grade the CEO's track record of deploying capital/M&A].
+* **Alignment:** [Note insider ownership levels and compensation metrics].
 
-### Skin in the Game & Incentives
-[Extract insider ownership, compensation architecture, and dilution risks from the 'Management Quality & Insider Incentives' report].
-
----
-## PAGE 5: FORENSICS, SOLVENCY & THE PRE-MORTEM
-### Forensic Accounting Red Flags
-[Extract the exact Working Capital anomalies, DSO spikes, or Capitalization tricks from the 'Forensic Accounting' report. Do not soften the tone.]
-
-### The Fortress Test (Buffett Reality Check)
-[Extract the Balance Sheet and Owner's Earnings breakdown from the 'Warren Buffett Breakdown' report].
-**[VISUAL DATA: SOLVENCY TRAFFIC LIGHT MATRIX]**
-Create a visual matrix using Emojis (🟢 Clean, 🟡 Watch, 🔴 Danger) for the following categories:
-- Earnings Quality: [Emoji] - [1-sentence reason]
-- Balance Sheet Solvency: [Emoji] - [1-sentence reason]
-- Cash Conversion: [Emoji] - [1-sentence reason]
-
-### The Pre-Mortem (Terminal Risk)
-[Extract the exact "Obituary" / Terminal Risk scenario from the 'Buyout Due Diligence' and 'Final Memo' reports. How does this company die in 5 years?]""",
-    
-    "Company - Financial Trajectory & Macro Sensitivity": """ROLE: You are a quantitative fundamental analyst.
-Using the provided financial data, market context, and historical performance, analyze the financial engine of [STOCK NAME] ([TICKER]). 
-TASKS:
-1. FINANCIAL TRAJECTORY: Analyze the 3-5 year trend for Revenue, Gross Margins, Operating Margins (EBIT), and Net Income. Are margins expanding or compressing? Why?
-2. CASH & CAPITAL ALLOCATION: Evaluate Free Cash Flow (FCF) generation. How is management deploying capital? (Are they hoarding cash, paying dividends, buying back shares, or aggressively doing M&A/Capex?)
-3. MACRO SENSITIVITY (The "Macro" in Macro Understanding): Explicitly define how sensitive [STOCK NAME] is to current macroeconomic factors. 
-- Interest Rates: How does the cost of capital affect their debt load or customer demand?
-- Inflation/Pricing Power: Can they pass rising costs to consumers without losing volume?
-- FX/Geopolitics: What is their exposure to currency fluctuations or supply chain shocks?
-4. ROIC & EFFICIENCY: Assess their Return on Invested Capital (ROIC) vs their Weighted Average Cost of Capital (WACC) if data allows. Are they actually creating value, or just growing for the sake of growth?
-OUTPUT FORMAT: Use heavy formatting, bullet points, and bold text for readability. Output the *story* those numbers tell. End with a 1-sentence "Financial Health Verdict".""",
+## 6. FINAL RESEARCH CONCLUSION
+[Provide a final, 3-sentence objective conclusion weighing the asymmetric risk/reward of the equity at current valuations.]""",
 
     "Company - Final Investment Memo & Rating": """ROLE: You are the Lead Portfolio Manager and Senior Equity Analyst covering [STOCK NAME] ([TICKER]).
 You are synthesizing all provided research into a final, actionable investment memo. 
@@ -1089,13 +1097,40 @@ with tab1:
                 global_tasks[email]["audio_error"] = str(e)
                 global_tasks[email]["audio_data"] = None
 
-        update_task_progress(email, 0.95, "Compiling ZIP package...")
+        update_task_progress(email, 0.95, "Compiling ZIP package & Visuals...")
+        
+        # --- NEW: INJECT MATPLOTLIB CHARTS INTO THE MASTER SYNTHESIS ---
+        target_report = "Master Synthesis - The Institutional Tear Sheet"
+        if target_report in final_user_reports:
+            chart_b64 = generate_financial_chart_base64(resolved_ticker)
+            if chart_b64:
+                # We append an HTML <img> tag using the raw base64 data so it embeds offline!
+                visual_injection = f"\n\n### 📊 Quantitative Visual Data\n<img src='data:image/png;base64,{chart_b64}' width='650' style='border-radius: 8px; box-shadow: 0px 4px 12px rgba(0,0,0,0.1);'/>\n"
+                final_user_reports[target_report] += visual_injection
+
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for name, text in final_user_reports.items():
                 safe_name = name.replace(" ", "_").replace("/", "-")
-                html_content = markdown.markdown(text, extensions=["tables"])
-                doc_content = f"<html><head><meta charset='utf-8'></head><body>{html_content}</body></html>"
+                
+                # We add the 'nl2br' extension so Markdown respects new lines properly
+                html_content = markdown.markdown(text, extensions=["tables", "nl2br"])
+                
+                # Wrap the HTML in a clean styling body for the Word Document export
+                doc_content = f"""<html>
+                <head>
+                    <meta charset='utf-8'>
+                    <style>
+                        body {{ font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                        h1, h2, h3 {{ color: #111; border-bottom: 1px solid #eaeaea; padding-bottom: 5px; }}
+                        table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+                        th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                        th {{ background-color: #f4f4f4; }}
+                    </style>
+                </head>
+                <body>{html_content}</body>
+                </html>"""
+                
                 zip_file.writestr(f"{resolved_ticker}_{safe_name}.doc", doc_content.encode("utf-8"))
             if audio_bytes:
                 zip_file.writestr(f"{resolved_ticker}_Premium_Podcast.mp3", audio_bytes)
