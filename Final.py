@@ -34,10 +34,6 @@ SUPER_USERS = ["boatengampomah@gmail.com", "emcheix@gmail.com"]
 # --- 1. SELF-HEALING DATABASE, QUOTAS, & DOSSIER LOGIC ---
 # ==============================================================================
 
-# ==============================================================================
-# --- 1. SELF-HEALING DATABASE, QUOTAS, & DOSSIER LOGIC ---
-# ==============================================================================
-
 def init_db():
     try:
         conn = sqlite3.connect("users.db")
