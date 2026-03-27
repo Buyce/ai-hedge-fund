@@ -58,8 +58,40 @@ def init_db():
         try: c.execute("ALTER TABLE dossiers ADD COLUMN scorecard TEXT")
         except Exception: pass 
             
+        # --- WEEKLY SUBSCRIPTIONS TABLE ---
+        c.execute("""CREATE TABLE IF NOT EXISTS weekly_subs (
+            email TEXT PRIMARY KEY,
+            is_active BOOLEAN,
+            tier TEXT,
+            stocks TEXT,
+            industries TEXT,
+            reports TEXT
+        )""")
+        
         conn.commit(); conn.close()
     except Exception: pass
+
+def get_weekly_sub(email):
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db"); c = conn.cursor()
+        c.execute("SELECT is_active, stocks, industries, reports FROM weekly_subs WHERE email=?", (email.lower(),))
+        row = c.fetchone(); conn.close()
+        if row: return {"is_active": bool(row[0]), "stocks": json.loads(row[1]), "industries": json.loads(row[2]), "reports": json.loads(row[3])}
+        return {"is_active": False, "stocks": [], "industries": [], "reports": []}
+    except Exception: return {"is_active": False, "stocks": [], "industries": [], "reports": []}
+
+def save_weekly_sub(email, tier, is_active, stocks, industries, reports):
+    init_db()
+    try:
+        conn = sqlite3.connect("users.db"); c = conn.cursor()
+        c.execute("""INSERT INTO weekly_subs (email, is_active, tier, stocks, industries, reports) 
+                     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(email) DO UPDATE SET 
+                     is_active=excluded.is_active, tier=excluded.tier, stocks=excluded.stocks, 
+                     industries=excluded.industries, reports=excluded.reports""",
+                  (email.lower(), is_active, tier, json.dumps(stocks), json.dumps(industries), json.dumps(reports)))
+        conn.commit(); conn.close()
+    except Exception as e: print(f"Sub Error: {e}")
 
 # --- NEW: TIER MANAGEMENT FUNCTIONS ---
 def get_user_tier(email):
@@ -865,10 +897,39 @@ with st.sidebar:
             st.dataframe(df, use_container_width=True)
             st.download_button("📥 Export Leads CSV", df.to_csv(index=False), "beresearch_leads.csv", "text/csv")
             conn.close()
-        except Exception: pass
+        except Exception: 
+            pass # <-- FIX: This safely closes the Lead Database try-block!
+
+        st.markdown("---")
+        st.markdown("### 📨 Dispatch Weekly Emails")
+        st.caption("Click these to manually process and send the automated weekly reports to subscribed users.")
+        
+        if st.button("▶️ Run Monday Free Batch (Trending)"):
+            st.info("Fetching trending stocks...")
+            trending = get_live_trending_tickers(st.secrets.get("GOOGLE_API_KEY", ""))
+            try:
+                conn = sqlite3.connect("users.db"); c = conn.cursor()
+                c.execute("SELECT email FROM weekly_subs WHERE is_active=1 AND tier='Free'")
+                free_users = [row[0] for row in c.fetchall()]; conn.close()
+                
+                # In a production app, you would loop through 'free_users' and email them the trending report here.
+                st.success(f"Simulated Monday Batch! Would have sent trending stocks {trending} to {len(free_users)} free users.")
+            except Exception as e: 
+                st.error(e)
+            
+        if st.button("▶️ Run Saturday Premium Batch"):
+            try:
+                conn = sqlite3.connect("users.db"); c = conn.cursor()
+                c.execute("SELECT email, stocks, industries, reports FROM weekly_subs WHERE is_active=1 AND tier IN ('Pro', 'Ultra')")
+                paid_users = c.fetchall(); conn.close()
+                
+                # In a production app, you would feed these configurations back into execute_background_job()
+                st.success(f"Simulated Saturday Batch! Would have spun up heavy background workers for {len(paid_users)} premium users.")
+            except Exception as e: 
+                st.error(e)
 
 # --- MOBILE-OPTIMIZED TABS ---
-tab1, tab2, tab3 = st.tabs(["🔍 Research", "📚 Library", "🧮 Valuation"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 Research", "📚 Library", "🧮 Valuation", "📅 Weekly Reports"])
 
 # ==============================================================================
 # --- TAB 1: GENERATE NEW RESEARCH ---
@@ -1802,3 +1863,62 @@ Also include "historical_data": An array of 4 objects for the last 4 years. Each
                     st.error("Could not pull reliable financial data for this ticker. Ensure it is a valid US public stock.")
             except Exception as e:
                 st.error(f"Error loading valuation data. Please check your API key or try again later. ({e})")
+
+# ==============================================================================
+# --- TAB 4: AUTOMATED WEEKLY INSIGHTS ---
+# ==============================================================================
+with tab4:
+    st.header("📅 Automated Weekly Insights")
+    st.markdown("Set your research on autopilot. Get institutional-grade reports delivered directly to your inbox.")
+    
+    sub_email = st.text_input("📧 Confirm your email address to manage subscriptions:", key="sub_email_input").strip().lower()
+    
+    if sub_email and "@" in sub_email:
+        sub_tier = get_user_tier(sub_email)
+        is_sub_super = sub_email in SUPER_USERS
+        current_prefs = get_weekly_sub(sub_email)
+        
+        st.markdown("---")
+        
+        # --- FREE TIER UI ---
+        if sub_tier == "Free" and not is_sub_super:
+            st.subheader("📈 The Monday Market Pulse (Free Tier)")
+            st.markdown("Every **Monday at 4:00 PM**, receive a high-level summary of the top 5 trending stocks on Wall Street, sent straight to your inbox.")
+            
+            opt_in_free = st.toggle("✅ Subscribe to Free Weekly Trending Report", value=current_prefs["is_active"])
+            if st.button("💾 Save Preferences"):
+                save_weekly_sub(sub_email, "Free", opt_in_free, [], [], [])
+                st.success("Your free weekly subscription has been updated!")
+                
+            st.info("💡 **Want custom reports?** Upgrade to Pro or Ultra to track specific stocks and industries every Saturday morning.")
+            
+        # --- PRO / ULTRA TIER UI ---
+        else:
+            st.subheader("👑 Premium Weekend Dossier (Pro & Ultra Tier)")
+            st.markdown("Every **Saturday at 10:00 AM**, our AI will compile a massive, custom deep-dive on the exact assets you care about.")
+            
+            opt_in_paid = st.toggle("✅ Activate Premium Weekly Delivery", value=current_prefs["is_active"])
+            
+            st.markdown("##### 1. Select up to 3 Stocks")
+            stock_1 = st.text_input("Stock 1 Ticker (e.g., AAPL):", value=current_prefs["stocks"][0] if len(current_prefs["stocks"]) > 0 else "")
+            stock_2 = st.text_input("Stock 2 Ticker (e.g., TSLA):", value=current_prefs["stocks"][1] if len(current_prefs["stocks"]) > 1 else "")
+            stock_3 = st.text_input("Stock 3 Ticker (e.g., PLTR):", value=current_prefs["stocks"][2] if len(current_prefs["stocks"]) > 2 else "")
+            
+            st.markdown("##### 2. Select up to 3 Industries")
+            ind_1 = st.text_input("Industry 1 (e.g., Semiconductors):", value=current_prefs["industries"][0] if len(current_prefs["industries"]) > 0 else "")
+            ind_2 = st.text_input("Industry 2 (e.g., AI Software):", value=current_prefs["industries"][1] if len(current_prefs["industries"]) > 1 else "")
+            ind_3 = st.text_input("Industry 3 (e.g., Clean Energy):", value=current_prefs["industries"][2] if len(current_prefs["industries"]) > 2 else "")
+            
+            st.markdown("##### 3. Select Report Types")
+            report_options = list(gem_prompts.keys())
+            selected_sub_reports = st.multiselect("Choose the specific analyses to run on your targets:", report_options, default=current_prefs["reports"])
+            
+            if st.button("💾 Save Premium Subscription"):
+                clean_stocks = [s.strip().upper() for s in [stock_1, stock_2, stock_3] if s.strip()]
+                clean_inds = [i.strip() for i in [ind_1, ind_2, ind_3] if i.strip()]
+                
+                if opt_in_paid and not selected_sub_reports:
+                    st.error("Please select at least one report type to receive.")
+                else:
+                    save_weekly_sub(sub_email, sub_tier, opt_in_paid, clean_stocks, clean_inds, selected_sub_reports)
+                    st.success("👑 Premium Weekly Subscription saved! See you Saturday morning.")
