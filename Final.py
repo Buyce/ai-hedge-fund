@@ -613,7 +613,91 @@ OUTPUT STRUCTURE: Use aggressive formatting, bullet points, and exact quotes whe
    - Note any extreme use of hedging language (e.g., "we believe," "navigating macro headwinds," "transitory") versus absolute confidence (e.g., "record demand," "structurally highly profitable").
 4. EXECUTIVE DISSONANCE: Compare the tone of the CEO vs the CFO. Is the CEO selling a massive visionary TAM expansion while the CFO is quietly walking back margin guidance and cutting CapEx? Where is the friction?
 5. THE "UNSAID" REALITY (READING THE TAPE): Based on their excuses, defensive postures, or aggressive confidence, what is the hidden truth about their pricing power, consumer health, or supply chain that they didn't explicitly state?
-6. FINAL BEHAVIORAL VERDICT: Rate the true underlying management sentiment as one of the following: AGGRESSIVELY BULLISH, CAUTIOUSLY OPTIMISTIC, DEFENSIVE, or EVASIVE. Provide a 2-sentence justification for this rating."""
+6. FINAL BEHAVIORAL VERDICT: Rate the true underlying management sentiment as one of the following: AGGRESSIVELY BULLISH, CAUTIOUSLY OPTIMISTIC, DEFENSIVE, or EVASIVE. Provide a 2-sentence justification for this rating.""",
+
+    # --- ETF AGENTS ---
+    "ETF - Comprehensive Institutional Analysis": """ROLE: Professional Investment Analyst specializing in Exchange-Traded Funds (ETFs). 
+TASK: Analyze the following ETF in extensive detail:
+
+[STOCK NAME] ([TICKER])
+
+Your analysis must be deeply structured, data-driven, and include insights that a portfolio manager or institutional investor would expect. Provide the answer using clear section headers, bullet points, tables, and concise explanations. 
+
+### 1. Executive Summary
+- What type of ETF is this?
+- Who is it best suited for? (investor profile, time horizon, risk level)
+- Key advantages and disadvantages
+- High-level suitability: income, growth, diversification, stability, sector exposure, etc.
+
+### 2. Fund Strategy & Composition
+- Fund objective and strategy
+- Index tracked (if any)
+- Holdings breakdown:
+  - Top 10 holdings (with % weight)
+  - Sector allocation
+  - Geographic allocation
+  - Market cap distribution (large/mid/small-cap)
+- How these components affect risk and performance
+
+### 3. Historical Performance
+- Annualized returns over 1, 3, 5, 10 years (if available)
+- Benchmark comparison
+- Risk-adjusted performance:
+  - Sharpe ratio
+  - Sortino ratio
+  - Alpha vs benchmark
+  - Beta vs benchmark
+  - Standard deviation / volatility
+- Key performance drivers
+
+### 4. Costs & Efficiency
+- Expense ratio (comment on competitiveness)
+- Tracking difference and tracking error
+- Bid-ask spread and liquidity profile
+- Assets under management (AUM) analysis
+
+### 5. Risk Analysis
+- Primary risk factors: sector, geography, currency, interest rate, concentration risk
+- Drawdown analysis
+- Sensitivity to macroeconomic conditions
+- Volatility assessment vs peers
+
+### 6. Dividend Profile (if applicable)
+- Dividend yield
+- Payout frequency
+- Distribution history and consistency
+- Tax considerations
+
+### 7. Comparison vs Peers
+Provide a table comparing this ETF with 2–3 close competitors:
+- Ticker
+- Strategy
+- Expense ratio
+- AUM
+- Performance
+- Volatility
+- Dividend yield
+
+Highlight which ETF is stronger in which category.
+
+### 8. Use Cases in a Portfolio
+Provide detailed scenarios where this ETF adds value:
+- Long-term retirement portfolio
+- Diversification enhancer
+- Inflation hedge (if applicable)
+- Defensive or growth-focused allocations
+- Tactical vs strategic use
+
+### 9. Red Flags & Considerations
+- Weaknesses or limitations
+- Structural risks
+- Better alternatives for certain goals
+
+### 10. Final Verdict
+Provide a balanced, highly actionable conclusion including:
+- Who should invest in this ETF
+- Who should avoid it
+- The overall investment thesis in 3–5 sentences"""
 }
 
 PODCAST_PROMPTS = {
@@ -704,6 +788,23 @@ FORMATTING RULES: Dialogue between [Host A]: (Adam, Activist Board Member) and [
 FLOW: 1. Psychological Archetype & History. 2. Masterclass on Capital Allocation (M&A discipline, ill-timed buybacks). 3. Proxy Statement deep-dive (Unpacking hidden RSUs, insider selling, and misaligned KPI targets). 4. Crisis Management: How they handle macro headwinds. 5. The Activist Verdict: Compounder or Value Destroyer?"""
     },
 
+"ETF": {
+        "Free": """ROLE: You are two world-class financial analysts hosting the B.E Research "Deep Dive" Podcast.
+FOCUS: Explain the [STOCK NAME] ETF to long-term investors.
+FORMATTING RULES: Write strictly as dialogue between [Host A]: (Adam, analytical lead) and [Host B]: (Rachel, curious co-host). Use human filler words. NO headers.
+FLOW: 1. Context: What index or strategy does this ETF track? 2. The Holdings: What are the top sectors or companies inside it? 3. Costs & Yield: Mention the expense ratio and dividend. 4. The Bottom Line: Who is this fund built for?""",
+
+        "Pro": """ROLE: You are two world-class financial analysts hosting the B.E Research "Deep Dive" Podcast.
+FOCUS: A rigorous fundamental analysis of the [STOCK NAME] ETF.
+FORMATTING RULES: Dialogue between [Host A]: (Adam, sharp portfolio manager) and [Host B]: (Rachel, skeptical analyst). Natural interruptions. NO headers.
+FLOW: 1. Strategy & Objective: Deconstruct the ETF's mandate and the index it tracks. 2. Under the Hood: Debate the top 10 holdings and sector concentration risks. 3. Performance & Efficiency: Analyze the expense ratio, tracking error, and historical risk-adjusted returns (Sharpe/Alpha). 4. Portfolio Fit: Debate whether this is a core holding or a tactical satellite position.""",
+
+        "Ultra": """ROLE: You are two world-class financial analysts hosting a private, boardroom-level briefing on the [STOCK NAME] ETF for institutional asset allocators.
+FOCUS: An exhaustive, masterclass-level breakdown of the fund's mechanics and risk profile.
+FORMATTING RULES: Dialogue between [Host A]: (Adam, Master Portfolio Manager) and [Host B]: (Rachel, Quantitative Risk Analyst). Intense, data-heavy debate. NO headers.
+FLOW: 1. The Big Picture: The structural thesis behind the ETF's specific strategy or sector. 2. Granular Composition: A masterclass on its geographic, market-cap, and sector weighting. 3. Risk & Volatility Metrics: Deep dive into its Beta, Maximum Drawdown, and sensitivity to macroeconomic rate changes. 4. Competitive Landscape: How does this fund compare to its 3 closest peers in terms of liquidity, bid-ask spreads, and expense ratios? 5. Final Verdict: The asymmetric risk/reward of allocating capital here today."""
+    },
+    
     "Concept": {
         "Free": """ROLE: Scriptwriter for B.E Research 101 Podcast. Focus: '{CONCEPT NAME}'.
 FORMATTING RULES: Dialogue between [Host A]: (Adam) and [Host B]: (Rachel). NO headers. 
@@ -723,7 +824,8 @@ dependent_agents = ["Master Synthesis - The Institutional Tear Sheet", "Company 
 industry_agents = [k for k in gem_prompts.keys() if "Industry" in k]
 concept_agents = ["Concept - Investment Education & Metric Breakdown"]
 ceo_agents = ["CEO - Track Record & Capital Allocation"]
-stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents]
+etf_agents = ["ETF - Comprehensive Institutional Analysis"] # <-- NEW LINE
+stock_base_agents = [k for k in gem_prompts.keys() if k not in dependent_agents + industry_agents + concept_agents + ceo_agents + etf_agents] # <-- UPDATED LINE
 
 
 # ==============================================================================
@@ -1058,7 +1160,8 @@ with tab1:
             update_task_progress(email, 0.89, f"Stage 3: Writing {tier_key} Script...")
             try:
                 # Grab the correct nested prompt based on the user's tier
-                if any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"][tier_key]
+                if any(p in etf_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["ETF"][tier_key]
+                elif any(p in stock_base_agents + dependent_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Company"][tier_key]
                 elif any(p in industry_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["Industry"][tier_key]
                 elif any(p in ceo_agents for p in prompts_to_run): active_persona = PODCAST_PROMPTS["CEO"][tier_key]
                 else: active_persona = PODCAST_PROMPTS["Concept"][tier_key]
