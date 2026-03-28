@@ -208,6 +208,16 @@ def get_user_dossiers(email):
     except Exception:
         return pd.DataFrame()
 
+def render_getting_started(tab_name, subtitle, steps, what_you_get):
+    """Renders a sleek, collapsible 'How to use' guide for each tab."""
+    with st.expander(f"❔ Getting Started with {tab_name}", expanded=False):
+        st.markdown(f"*{subtitle}*")
+        st.markdown("---")
+        for i, step in enumerate(steps, 1):
+            st.markdown(f"**{i}**. {step}")
+        st.markdown("---")
+        st.success(f"**💡 WHAT YOU'LL GET**\n\n{what_you_get}")
+
 # ==============================================================================
 # --- 2. SET UP THE WEB PAGE & HELPER FUNCTIONS ---
 # ==============================================================================
@@ -931,6 +941,20 @@ tab1, tab2, tab3, tab4 = st.tabs(["🔍 Research", "📚 Library", "🧮 Valuati
 # --- TAB 1: GENERATE NEW RESEARCH ---
 # ==============================================================================
 with tab1:
+    # --- GETTING STARTED GUIDE ---
+    render_getting_started(
+        tab_name="Research",
+        subtitle="Generate institutional-grade equity research reports powered by AI.",
+        steps=[
+            "🔍 **Enter Target Info:** Type a ticker symbol (e.g., TSLA) and hit enter. Company name, CEO, and industry auto-fill. You can also click trending stocks below.",
+            "📑 **Select Reports:** Pick which reports to generate — Company financials, industry analysis, CEO track record, and more. Free users can select up to 2 per run.",
+            "⚙️ **Choose Engine & Tools:** Free tier uses Gemini Flash with Google Search. Pro/Ultra users unlock Gemini Pro and Deep Research for richer results.",
+            "🎧 **Add a Podcast (Optional):** Select a podcast tier to generate an AI audio briefing with two analyst voices discussing your research.",
+            "🚀 **Generate:** Hit Generate — the AI runs multiple research agents in parallel. Reports are emailed as a PDF and saved to your Library."
+        ],
+        what_you_get="Institutional-quality research reports with investment ratings, financial analysis, scorecards, and optional AI podcast — all delivered to your inbox and saved permanently."
+    )
+    
     st.markdown("### Step 1: Target Information")
 
     with st.expander("🌐 Discover Today's Trending Stocks (Live Market Pulse)", expanded=False):
@@ -1467,6 +1491,20 @@ with tab1:
 # ==============================================================================
 with tab2:
     st.markdown("### 📚 My Research Library (Permanent Dossiers & Scorecards)")
+    
+    # --- GETTING STARTED GUIDE ---
+    render_getting_started(
+        tab_name="Library",
+        subtitle="Your permanent archive of all generated research — searchable, expandable, and always up to date.",
+        steps=[
+            "📚 **Browse Your Dossiers:** Every company you research gets a dossier with all reports, thesis, anti-thesis, valuation assumptions, and a multi-factor scorecard.",
+            "🔍 **Search & Filter:** Use the search bar to find dossiers by ticker symbol. Click any dossier to expand its full contents.",
+            "📖 **View Full Reports:** Expand individual sections or click 'View All Sections' for an immersive document mode with unified navigation.",
+            "🔄 **Auto-Updated:** Each time you run new research on the same ticker, the dossier is automatically updated with the latest data."
+        ],
+        what_you_get="A growing library of deep company dossiers with scorecards, thesis/anti-thesis pairs, and all your research reports — permanently saved and always accessible."
+    )
+
     st.markdown("Every time you generate research on a stock, its core elements are permanently saved and updated here.")
 
     if not user_email_clean or "@" not in user_email_clean:
@@ -1512,6 +1550,22 @@ with tab2:
 # ==============================================================================
 with tab3:
     st.header("🧮 The Investment Framework")
+    
+    # --- GETTING STARTED GUIDE ---
+    render_getting_started(
+        tab_name="Valuation",
+        subtitle="Stress-test your thesis with institutional-grade math.",
+        steps=[
+            "🎯 **Select Framework:** Choose between Classic Value (FCF & P/E) or Mega-Cap Tech (OCF & Scenarios).",
+            "📊 **Load Financials:** Enter a ticker to automatically pull current prices, cash flows, and key metrics.",
+            "🧮 **Review Core Metrics:** Analyze Earnings Yield, FCF Yield, and ROIC compared to risk-free treasury rates.",
+            "🧪 **Apply Stress Tests:** Toggle recession or growth slowdowns to see how the intrinsic value reacts in real-time.",
+            "⚖️ **Margin of Safety:** Get a definitive, math-driven verdict (Strong Buy to Avoid) based on your custom inputs."
+        ],
+        what_you_get="An interactive, math-driven valuation model with a downloadable Tear Sheet PDF to validate your investment thesis."
+    )
+    
+    st.markdown("Stress-test your thesis with institutional-grade math. Choose your framework below.")
     st.markdown("Stress-test your thesis with institutional-grade math. Choose your framework below.")
 
     # --- UPDATED DATA FETCHER (NOW PULLS OCF SPECIFICALLY) ---
@@ -1789,6 +1843,20 @@ with tab3:
 # ==============================================================================
 with tab4:
     st.header("📅 Automated Weekly Insights")
+    
+    # --- GETTING STARTED GUIDE ---
+    render_getting_started(
+        tab_name="Weekly Reports",
+        subtitle="Put your research on autopilot — get institutional-grade reports delivered to your inbox on a schedule.",
+        steps=[
+            "📬 **Free: Monday Market Pulse:** Every Monday at 4 PM, receive a summary of the top 5 trending stocks — free for all users. Just toggle the switch and save.",
+            "👑 **Pro/Ultra: Weekend Dossier:** Upgrade to get deep-dive reports every Saturday at 10 AM on your chosen stocks and industries.",
+            "📝 **Customize Your Watchlist:** Pro/Ultra users can specify up to 3 stocks and 3 industries to track, plus choose which report types to include.",
+            "💾 **Save Preferences:** Click 'Save Preferences' to lock in your choices. Reports are auto-generated and emailed on schedule."
+        ],
+        what_you_get="Automated weekly research emails — a free Monday market overview for all users, or a premium Saturday deep-dive tailored to your specific stocks and sectors."
+    )
+   
     st.markdown("Set your research on autopilot. Get institutional-grade reports delivered directly to your inbox.")
     
     sub_email = st.text_input("📧 Confirm your email address to manage subscriptions:", key="sub_email_input").strip().lower()
