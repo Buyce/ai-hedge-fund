@@ -1434,6 +1434,10 @@ with tab1:
             st.info(f"⏳ **Running:** {task['progress']}")
             st.progress(visual_progress)
             st.caption(f"Estimated delivery time remaining: **{format_eta(est_rem)}**")
+            # --- THE GHOST BUSTER BUTTON ---
+            if st.button("🛑 Cancel Run / Clear Stuck Task"):
+                del global_tasks[user_email_clean]
+                st.rerun()
             time.sleep(2); st.rerun()
 
         elif task["status"] == "complete":
