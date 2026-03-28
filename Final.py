@@ -1508,15 +1508,15 @@ with tab2:
             with st.expander("👀 Watchlist Triggers"):
                 st.markdown(dossier_data['watchlist_triggers'])
 # ==============================================================================
-# --- TAB 3: VALUATION WORKBENCH (THE VALUE INVESTING FRAMEWORK) ---
+# --- TAB 3: VALUATION WORKBENCH (DUAL-ENGINE FRAMEWORK) ---
 # ==============================================================================
 with tab3:
     st.header("🧮 The Investment Framework")
-    st.markdown("Strategy: **Quality at a Sensible Price.** Find good businesses → measure their cash return → compare to alternatives → stress test → only buy with a margin of safety.")
+    st.markdown("Stress-test your thesis with institutional-grade math. Choose your framework below.")
 
+    # --- UPDATED DATA FETCHER (NOW PULLS OCF SPECIFICALLY) ---
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_valuation_metrics(ticker, api_key):
-        """Fetches core metrics specifically needed for the 6-Step Value Framework."""
         metrics = {"shortName": ticker, "historical_data": []}
         try:
             stock_val = yf.Ticker(ticker); info_val = stock_val.info
@@ -1525,10 +1525,7 @@ with tab3:
             metrics["shares_out"] = info_val.get("sharesOutstanding", 1.0)
             metrics["eps_ttm"] = info_val.get("trailingEps", 0.0)
             metrics["trailing_pe"] = info_val.get("trailingPE", 0.0)
-            
-            # Fetch ROIC (Fallback to ROE or ROA if pure ROIC is missing)
             metrics["roic"] = info_val.get("returnOnEquity") or info_val.get("returnOnAssets") or 0.0
-            
             metrics["total_cash"] = info_val.get("totalCash", 0.0)
             metrics["total_debt"] = info_val.get("totalDebt", 0.0)
             
@@ -1539,15 +1536,17 @@ with tab3:
                 cf_stmt = stock_val.cashflow
                 op_cash = cf_stmt.loc['Operating Cash Flow'].iloc[0]
                 capex = cf_stmt.loc['Capital Expenditure'].iloc[0] # Usually reported as negative
+                metrics["ocf_ttm"] = op_cash
                 metrics["fcf_ttm"] = op_cash + capex
             except Exception:
+                metrics["ocf_ttm"] = info_val.get("operatingCashflow", 0.0)
                 metrics["fcf_ttm"] = info_val.get("freeCashflow", 0.0)
                 
             return metrics
             
         except Exception as e:
             client = genai.Client(api_key=api_key)
-            prompt = f"""Search live financial data for '{ticker}'. Return ONLY strict JSON: "current_price", "shares_out", "eps_ttm", "trailing_pe", "roic" (as decimal), "fcf_ttm", "total_cash", "total_debt"."""
+            prompt = f"""Search live financial data for '{ticker}'. Return ONLY strict JSON: "current_price", "shares_out", "eps_ttm", "trailing_pe", "roic" (as decimal), "ocf_ttm", "fcf_ttm", "total_cash", "total_debt"."""
             try:
                 res = client.models.generate_content(model="gemini-3.1-flash-lite-preview", contents=prompt)
                 parsed = json.loads(res.text.strip().replace("```json", "").replace("```", "").strip())
@@ -1558,18 +1557,21 @@ with tab3:
 
     # --- THE INPUT FORM ---
     with st.form("valuation_ticker_form"):
-        col_t1, col_t2 = st.columns([3, 1])
+        col_t1, col_t2 = st.columns([2, 2])
         with col_t1:
-            input_ticker = st.text_input("Enter Ticker to Value (e.g., AAPL):", value=st.session_state.get("active_val_ticker", "")).strip().upper()
+            input_ticker = st.text_input("Enter Ticker to Value (e.g., META, AAPL):", value=st.session_state.get("active_val_ticker", "")).strip().upper()
         with col_t2:
-            st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-            load_data_btn = st.form_submit_button("📊 Run Framework")
+            framework_choice = st.radio("Select Valuation Framework:", ["Classic Value (FCF & P/E)", "Mega-Cap Tech (OCF & Scenarios)"], horizontal=True)
+            
+        load_data_btn = st.form_submit_button("📊 Run Institutional Framework")
             
     if load_data_btn and input_ticker:
         st.session_state.active_val_ticker = input_ticker
+        st.session_state.active_framework = framework_choice
 
     if st.session_state.get("active_val_ticker"):
         val_ticker = st.session_state.active_val_ticker
+        active_fw = st.session_state.get("active_framework", "Classic Value (FCF & P/E)")
         
         with st.spinner(f"Fetching financial engine data for {val_ticker}..."):
             metrics = get_valuation_metrics(val_ticker, st.secrets.get("GOOGLE_API_KEY"))
@@ -1578,38 +1580,13 @@ with tab3:
                 p_price = metrics["current_price"]
                 p_shares = metrics["shares_out"]
                 p_market_cap = p_price * p_shares
+                p_ocf = metrics.get("ocf_ttm", 0.0)
                 p_fcf = metrics.get("fcf_ttm", 0.0)
                 p_pe = metrics.get("trailing_pe", 0.0)
                 p_eps = metrics.get("eps_ttm", 0.0)
                 p_roic = metrics.get("roic", 0.0)
                 p_rf = metrics["risk_free_rate"]
-                p_sp500_yield = 0.045 # Hardcoded S&P 500 average earnings yield (~4.5%)
-                
-                st.markdown("---")
-                
-                # ==========================================
-                # 1️⃣ STEP 1: QUALITATIVE BUSINESS CHECK
-                # ==========================================
-                st.markdown("### 1️⃣ STEP 1 — Understand the Business (Qualitative)")
-                st.caption("Before any numbers, answer these questions. If this fails → STOP. No valuation needed.")
-                
-                c_qual1, c_qual2 = st.columns(2)
-                with c_qual1:
-                    q_biz = st.checkbox("Understand what the company actually does?")
-                    q_moat = st.checkbox("Does it have a structural Moat?")
-                with c_qual2:
-                    q_dem = st.checkbox("Is demand structural (not cyclical/fad)?")
-                    q_gro = st.checkbox("Can it grow for the next 5–10 years?")
-                
-                st.markdown("---")
-                
-                # ==========================================
-                # 2️⃣ STEP 2: CORE METRICS
-                # ==========================================
-                st.markdown("### 2️⃣ STEP 2 — Core Metrics (Our Mathematical Base)")
-                
-                ey_val = (1 / p_pe) if p_pe > 0 else 0.0
-                fcfy_val = (p_fcf / p_market_cap) if p_market_cap > 0 else 0.0
+                net_cash = metrics["total_cash"] - metrics["total_debt"]
                 
                 def metric_box(title, value_str, rule_text, color_hex):
                     return f"""
@@ -1620,192 +1597,190 @@ with tab3:
                     </div>
                     """
                 
-                if ey_val <= 0 or ey_val < p_rf: ey_color = "#dc2626" 
-                elif ey_val > p_sp500_yield: ey_color = "#16a34a" 
-                else: ey_color = "#ca8a04" 
-                
-                if fcfy_val >= 0.08: fcfy_color = "#15803d" 
-                elif fcfy_val >= 0.05: fcfy_color = "#16a34a" 
-                else: fcfy_color = "#dc2626" 
-                
-                if p_roic >= 0.15: roic_color = "#16a34a" 
-                elif p_roic >= 0.10: roic_color = "#ca8a04" 
-                else: roic_color = "#dc2626" 
-                
-                m1, m2, m3, m4 = st.columns(4)
-                m1.markdown(metric_box("Earnings Yield", f"{ey_val*100:.1f}%", f"10-Yr Bond: {p_rf*100:.1f}%", ey_color), unsafe_allow_html=True)
-                m2.markdown(metric_box("FCF Yield", f"{fcfy_val*100:.1f}%", ">5% Good | >8% Great", fcfy_color), unsafe_allow_html=True)
-                m3.markdown(metric_box("Trailing EPS", f"${p_eps:.2f}", f"Current P/E: {p_pe:.1f}x", "#334155"), unsafe_allow_html=True)
-                m4.markdown(metric_box("ROIC", f"{p_roic*100:.1f}%", ">15% Excellent", roic_color), unsafe_allow_html=True)
-
                 st.markdown("---")
                 
-                # ==========================================
-                # 3️⃣ STEP 3 & 4: VALUATION & STRESS TESTING
-                # ==========================================
-                st.markdown("### 3️⃣ STEP 3 & 4 — Valuation & Stress Testing")
-                
-                # USER AWARENESS BANNER
-                st.info("💡 **PREDICT YOUR OWN SCENARIOS:** Do not just trust the default numbers! Adjust the growth rates, tweak the target exit P/E, or toggle the Stress Tests below. Watch how the Intrinsic Value and Margin of Safety dynamically recalculate based on your specific assumptions.")
-                
-                col_dcf, col_stress = st.columns([2, 1])
-                
-                with col_stress:
-                    st.markdown("##### 🧪 Stress Test Toggles")
-                    st.caption("Apply these shocks to see if the thesis survives.")
-                    stress_growth = st.checkbox("📉 Growth Slows (Cuts growth by 5%)")
-                    stress_pe = st.checkbox("🗜️ P/E Compresses (Exits at 20% lower multiple)")
-                    stress_recession = st.checkbox("🌪️ Recession Hits (Base Cash Flow drops 30%)")
-                
-                with col_dcf:
-                    st.markdown("##### ⚙️ DCF & Multiple Inputs")
-                    c_in1, c_in2, c_in3 = st.columns(3)
-                    base_g = c_in1.number_input("Est. Growth Yrs 1-5 (%)", value=15.0) / 100.0
-                    wacc = c_in2.number_input("Discount Rate (WACC) %", value=9.0) / 100.0
-                    term_g = c_in3.number_input("Terminal Growth %", value=2.5) / 100.0
-                    target_pe = c_in1.number_input("Target Exit P/E", value=float(p_pe) if p_pe > 0 else 20.0)
+                # ===============================================================================
+                # FRAMEWORK 2: MEGA-CAP TECH (OCF, EV BRIDGE, AND 3-WAY SCENARIOS)
+                # ===============================================================================
+                if active_fw == "Mega-Cap Tech (OCF & Scenarios)":
+                    st.info("💡 **INTERACTIVE PLAYGROUND:** Big tech valuation is all about adjusting growth assumptions. Tweak the Base, Bull, and Bear growth rates below to dynamically predict your own upside/downside scenarios.")
                     
-                    eff_g = base_g - 0.05 if stress_growth else base_g
-                    eff_fcf = p_fcf * 0.70 if stress_recession else p_fcf
-                    eff_eps = p_eps * 0.70 if stress_recession else p_eps
-                    eff_exit_pe = target_pe * 0.80 if stress_pe else target_pe
+                    st.markdown("### 1️⃣ Normalize the Cash Engine")
+                    st.caption("Strip away the GAAP noise. Focus purely on cash power and enterprise value.")
                     
-                    pv_cfs = sum([(eff_fcf * ((1 + eff_g)**i)) / ((1 + wacc)**i) for i in range(1, 6)])
-                    tv = ((eff_fcf * ((1 + eff_g)**5)) * (1 + term_g)) / (wacc - term_g) if wacc > term_g else 0
-                    pv_tv = tv / ((1 + wacc)**5)
-                    intrinsic_value = (pv_cfs + pv_tv + metrics["total_cash"] - metrics["total_debt"]) / p_shares if p_shares > 0 else 0
+                    pocfy_val = (p_market_cap / p_ocf) if p_ocf > 0 else 0.0
+                    if pocfy_val > 0 and pocfy_val < 15: pocf_color, pocf_text = "#15803d", "Cheap (<15x)"
+                    elif pocfy_val >= 15 and pocfy_val <= 22: pocf_color, pocf_text = "#ca8a04", "Fair (15-22x)"
+                    else: pocf_color, pocf_text = "#dc2626", "Premium (>22x)"
                     
-                    future_eps = eff_eps * ((1 + eff_g)**5)
-                    future_price = future_eps * eff_exit_pe
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.markdown(metric_box("Operating Cash Flow", f"${p_ocf/1e9:.1f}B", "Raw cash generated before Capex", "#334155"), unsafe_allow_html=True)
+                    c2.markdown(metric_box("Free Cash Flow", f"${p_fcf/1e9:.1f}B", "Cash after Capex/AI spend", "#334155"), unsafe_allow_html=True)
+                    c3.markdown(metric_box("Net Cash", f"${net_cash/1e9:.1f}B", "Total Cash minus Total Debt", "#334155"), unsafe_allow_html=True)
+                    c4.markdown(metric_box("P/OCF Multiple", f"{pocfy_val:.1f}x", pocf_text, pocf_color), unsafe_allow_html=True)
                     
-                    st.markdown(f"**DCF Intrinsic Value:** `${intrinsic_value:.2f}` per share")
-                    st.markdown(f"**5-Yr Target Price (EPS x P/E):** `${future_price:.2f}`")
+                    st.markdown("---")
+                    st.markdown("### 2️⃣ Earnings Yield vs Bonds (Risk Premium)")
+                    
+                    ey_val = (1 / p_pe) if p_pe > 0 else 0.0
+                    erp = ey_val - p_rf
+                    erp_color = "#dc2626" if erp < 0 else "#16a34a"
+                    
+                    e1, e2, e3 = st.columns(3)
+                    e1.metric("Earnings Yield", f"{ey_val*100:.1f}%")
+                    e2.metric("10-Yr US Treasury", f"{p_rf*100:.1f}%")
+                    e3.markdown(metric_box("Equity Risk Premium", f"{erp*100:.1f}%", "Negative = Bonds pay more than Earnings", erp_color), unsafe_allow_html=True)
+                    
+                    st.markdown("---")
+                    st.markdown("### 3️⃣ DCF Stress Tests (Bull, Base, Bear)")
+                    
+                    s1, s2, s3 = st.columns(3)
+                    wacc = s2.number_input("Discount Rate %", value=9.0) / 100.0
+                    term_g = s3.number_input("Terminal Growth %", value=3.0) / 100.0
+                    
+                    st.markdown("##### Adjust Growth Rates (Years 1-5)")
+                    g1, g2, g3 = st.columns(3)
+                    g_bull = g1.number_input("🟢 Bull Case Growth %", value=15.0) / 100.0
+                    g_base = g2.number_input("🟡 Base Case Growth %", value=12.0) / 100.0
+                    g_bear = g3.number_input("🔴 Bear Case Growth %", value=6.0) / 100.0
+                    
+                    def calc_dcf(fcf, g, t_g, dr, shares, n_cash):
+                        if dr <= t_g: return 0
+                        pv_cfs = sum([(fcf * ((1 + g)**i)) / ((1 + dr)**i) for i in range(1, 6)])
+                        tv = ((fcf * ((1 + g)**5)) * (1 + t_g)) / (dr - t_g)
+                        pv_tv = tv / ((1 + dr)**5)
+                        return (pv_cfs + pv_tv + n_cash) / shares if shares > 0 else 0
+                        
+                    val_bull = calc_dcf(p_fcf, g_bull, term_g, wacc, p_shares, net_cash)
+                    val_base = calc_dcf(p_fcf, g_base, term_g, wacc, p_shares, net_cash)
+                    val_bear = calc_dcf(p_fcf, g_bear, term_g, wacc, p_shares, net_cash)
+                    
+                    g1.markdown(f"**Bull Target:** `${val_bull:.2f}`")
+                    g2.markdown(f"**Base Target:** `${val_base:.2f}`")
+                    g3.markdown(f"**Bear Target:** `${val_bear:.2f}`")
+                    
+                    # Margin of Safety based on BASE case
+                    mos_pct = ((val_base - p_price) / val_base) * 100 if val_base > 0 else -100
+                    if mos_pct > 20: mos_label, mos_color = "UNDERVALUED", "#15803d"
+                    elif mos_pct >= 0: mos_label, mos_color = "FAIR VALUE", "#ca8a04"
+                    else: mos_label, mos_color = "OVERVALUED", "#dc2626"
+                    
+                    st.markdown("---")
+                    st.markdown("### 4️⃣ Synthesis & Verdict")
+                    st.markdown(f"""
+                    <div style="border: 2px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center;">
+                        <h3 style="margin:0; color: {mos_color};">Base Margin of Safety: {mos_pct:.1f}%</h3>
+                        <h1 style="margin:10px 0; font-size: 38px; color: {mos_color};">{mos_label}</h1>
+                        <p style="margin:0; color: #64748b;">(Current Price: ${p_price:.2f} | Base Intrinsic Value: ${val_base:.2f})</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Setup HTML Export for Big Tech
+                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Mega-Cap Tech Valuation</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Cash Engine</h3><div class="grid"><div class="box" style="background:#334;"><strong>Operating CF</strong><br>${p_ocf/1e9:.1f}B</div><div class="box" style="background:#334;"><strong>Free CF</strong><br>${p_fcf/1e9:.1f}B</div><div class="box" style="background:{pocf_color};"><strong>P/OCF</strong><br>{pocfy_val:.1f}x</div></div><h3>DCF Scenarios</h3><table><tr><th>Scenario</th><th>Growth Assumed</th><th>Target Value</th></tr><tr><td>Bull Case</td><td>{g_bull*100:.1f}%</td><td>${val_bull:.2f}</td></tr><tr><td>Base Case</td><td>{g_base*100:.1f}%</td><td>${val_base:.2f}</td></tr><tr><td>Bear Case</td><td>{g_bear*100:.1f}%</td><td>${val_bear:.2f}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2></div></body></html>"""
 
-                st.markdown("---")
 
-                # ==========================================
-                # 5️⃣ STEP 5: MARGIN OF SAFETY (THE CORE RULE)
-                # ==========================================
-                st.markdown("### 5️⃣ STEP 5 — Margin of Safety (MOS)")
-                
-                if intrinsic_value > 0:
-                    mos_pct = ((intrinsic_value - p_price) / intrinsic_value) * 100
+                # ===============================================================================
+                # FRAMEWORK 1: CLASSIC VALUE (FCF & P/E)
+                # ===============================================================================
                 else:
-                    mos_pct = -100.0 
-                
-                if mos_pct > 30: mos_label, mos_color = "STRONG BUY", "#15803d"
-                elif mos_pct >= 20: mos_label, mos_color = "BUY", "#16a34a"
-                elif mos_pct >= 10: mos_label, mos_color = "WATCH", "#ca8a04"
-                elif mos_pct >= 0: mos_label, mos_color = "WAIT", "#f97316"
-                else: mos_label, mos_color = "AVOID", "#dc2626"
-                
-                st.markdown(f"""
-                <div style="border: 2px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center;">
-                    <h3 style="margin:0; color: {mos_color};">MOS: {mos_pct:.1f}%</h3>
-                    <h1 style="margin:10px 0; font-size: 42px; color: {mos_color};">{mos_label}</h1>
-                    <p style="margin:0; color: #64748b;">(Current Price: ${p_price:.2f} | Intrinsic Value: ${intrinsic_value:.2f})</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                st.markdown("---")
+                    st.info("💡 **INTERACTIVE PLAYGROUND:** You can tweak the P/E Exit multiple, adjust growth rates, or click the Stress Test toggles below. Watch the Margin of Safety dynamically recalculate based on your specific assumptions.")
+                    
+                    st.markdown("### 1️⃣ Core Metrics")
+                    ey_val = (1 / p_pe) if p_pe > 0 else 0.0
+                    fcfy_val = (p_fcf / p_market_cap) if p_market_cap > 0 else 0.0
+                    
+                    if ey_val <= 0 or ey_val < p_rf: ey_color = "#dc2626" 
+                    elif ey_val > 0.045: ey_color = "#16a34a" 
+                    else: ey_color = "#ca8a04" 
+                    
+                    if fcfy_val >= 0.08: fcfy_color = "#15803d" 
+                    elif fcfy_val >= 0.05: fcfy_color = "#16a34a" 
+                    else: fcfy_color = "#dc2626" 
+                    
+                    if p_roic >= 0.15: roic_color = "#16a34a" 
+                    elif p_roic >= 0.10: roic_color = "#ca8a04" 
+                    else: roic_color = "#dc2626" 
+                    
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.markdown(metric_box("Earnings Yield", f"{ey_val*100:.1f}%", f"10-Yr Bond: {p_rf*100:.1f}%", ey_color), unsafe_allow_html=True)
+                    m2.markdown(metric_box("FCF Yield", f"{fcfy_val*100:.1f}%", ">5% Good | >8% Great", fcfy_color), unsafe_allow_html=True)
+                    m3.markdown(metric_box("Trailing EPS", f"${p_eps:.2f}", f"Current P/E: {p_pe:.1f}x", "#334155"), unsafe_allow_html=True)
+                    m4.markdown(metric_box("ROIC", f"{p_roic*100:.1f}%", ">15% Excellent", roic_color), unsafe_allow_html=True)
 
-                # ==========================================
-                # 6️⃣ STEP 6: PORTFOLIO FIT & EXPORT
-                # ==========================================
-                st.markdown("### 6️⃣ STEP 6 — Portfolio Fit & Final Verdict")
-                st.caption("We don’t buy stocks in isolation. Ask yourself:")
-                
-                p1, p2, p3 = st.columns(3)
-                p_exp = p1.checkbox("Does this add new exposure?")
-                p_risk = p2.checkbox("Does it increase risk?")
-                p_over = p3.checkbox("Does it overlap existing positions?")
-                
-                st.info(f"**🧾 THE ONE-LINE RULE:** 'We buy businesses that generate strong cash returns, grow consistently, and are priced below their intrinsic value, with clear margin of safety.' \n\n**System Verdict based on math:** You should **{mos_label}** {val_ticker} at this price level.")
+                    st.markdown("---")
+                    st.markdown("### 2️⃣ Valuation & Stress Testing")
+                    
+                    col_dcf, col_stress = st.columns([2, 1])
+                    
+                    with col_stress:
+                        st.markdown("##### 🧪 Stress Test Toggles")
+                        stress_growth = st.checkbox("📉 Growth Slows (Cuts growth by 5%)")
+                        stress_pe = st.checkbox("🗜️ P/E Compresses (Exits at 20% lower multiple)")
+                        stress_recession = st.checkbox("🌪️ Recession Hits (Base Cash Flow drops 30%)")
+                    
+                    with col_dcf:
+                        st.markdown("##### ⚙️ DCF & Multiple Inputs")
+                        c_in1, c_in2, c_in3 = st.columns(3)
+                        base_g = c_in1.number_input("Est. Growth Yrs 1-5 (%)", value=15.0) / 100.0
+                        wacc = c_in2.number_input("Discount Rate (WACC) %", value=9.0) / 100.0
+                        term_g = c_in3.number_input("Terminal Growth %", value=2.5) / 100.0
+                        target_pe = c_in1.number_input("Target Exit P/E", value=float(p_pe) if p_pe > 0 else 20.0)
+                        
+                        eff_g = base_g - 0.05 if stress_growth else base_g
+                        eff_fcf = p_fcf * 0.70 if stress_recession else p_fcf
+                        eff_eps = p_eps * 0.70 if stress_recession else p_eps
+                        eff_exit_pe = target_pe * 0.80 if stress_pe else target_pe
+                        
+                        pv_cfs = sum([(eff_fcf * ((1 + eff_g)**i)) / ((1 + wacc)**i) for i in range(1, 6)])
+                        tv = ((eff_fcf * ((1 + eff_g)**5)) * (1 + term_g)) / (wacc - term_g) if wacc > term_g else 0
+                        pv_tv = tv / ((1 + wacc)**5)
+                        intrinsic_value = (pv_cfs + pv_tv + metrics["total_cash"] - metrics["total_debt"]) / p_shares if p_shares > 0 else 0
+                        
+                        future_price = (eff_eps * ((1 + eff_g)**5)) * eff_exit_pe
+                        
+                        st.markdown(f"**DCF Intrinsic Value:** `${intrinsic_value:.2f}` per share")
+                        st.markdown(f"**5-Yr Target Price (EPS x P/E):** `${future_price:.2f}`")
 
+                    st.markdown("---")
+                    st.markdown("### 3️⃣ Margin of Safety (MOS)")
+                    
+                    mos_pct = ((intrinsic_value - p_price) / intrinsic_value) * 100 if intrinsic_value > 0 else -100.0
+                    
+                    if mos_pct > 30: mos_label, mos_color = "STRONG BUY", "#15803d"
+                    elif mos_pct >= 20: mos_label, mos_color = "BUY", "#16a34a"
+                    elif mos_pct >= 10: mos_label, mos_color = "WATCH", "#ca8a04"
+                    elif mos_pct >= 0: mos_label, mos_color = "WAIT", "#f97316"
+                    else: mos_label, mos_color = "AVOID", "#dc2626"
+                    
+                    st.markdown(f"""
+                    <div style="border: 2px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center;">
+                        <h3 style="margin:0; color: {mos_color};">MOS: {mos_pct:.1f}%</h3>
+                        <h1 style="margin:10px 0; font-size: 42px; color: {mos_color};">{mos_label}</h1>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Setup HTML Export for Classic Value
+                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Classic Value Tear Sheet</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Core Metrics</h3><div class="grid"><div class="box" style="background:{ey_color};"><strong>Earnings Yield</strong><br>{ey_val*100:.1f}%</div><div class="box" style="background:{fcfy_color};"><strong>FCF Yield</strong><br>{fcfy_val*100:.1f}%</div><div class="box" style="background:{roic_color};"><strong>ROIC</strong><br>{p_roic*100:.1f}%</div></div><h3>Stress-Tested Scenarios</h3><table><tr><th>Assumption</th><th>Value Used</th></tr><tr><td>Growth Assumed</td><td>{eff_g*100:.1f}%</td></tr><tr><td>WACC</td><td>{wacc*100:.1f}%</td></tr><tr><td>Exit P/E</td><td>{eff_exit_pe:.1f}x</td></tr><tr><td><strong>Stress Tests Active</strong></td><td>{'Yes' if (stress_growth or stress_pe or stress_recession) else 'None'}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2><p>Intrinsic Value: ${intrinsic_value:.2f}</p></div></body></html>"""
+
+
+                # ===============================================================================
+                # EXPORT BUTTON (RENDERS FOR BOTH FRAMEWORKS)
+                # ===============================================================================
                 st.markdown("---")
-                
-                # --- PDF / TEAR SHEET EXPORT BUILDER ---
                 st.markdown("### 📥 Export Your Custom Valuation")
-                st.caption("Download your exact stress-tested scenario as a clean Tear Sheet.")
-                
-                # Generate a beautiful HTML string combining all their custom inputs
-                html_export = f"""
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <meta charset='utf-8'>
-                    <title>{val_ticker} - Valuation Tear Sheet</title>
-                    <style>
-                        body {{ font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto; }}
-                        h1 {{ color: #111; border-bottom: 2px solid #2563eb; padding-bottom: 10px; }}
-                        .metric-grid {{ display: flex; gap: 20px; margin-bottom: 30px; }}
-                        .metric-box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; }}
-                        .verdict-box {{ border: 3px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center; margin-top: 30px; }}
-                        table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-                        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
-                        th {{ background-color: #f8fafc; }}
-                        .print-btn {{ display: block; width: 100%; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }}
-                        @media print {{ .print-btn {{ display: none; }} }}
-                    </style>
-                </head>
-                <body>
-                    <a href="#" class="print-btn" onclick="window.print()">🖨️ Click here to save as PDF</a>
-                    
-                    <h1>{val_ticker} - Institutional Valuation Tear Sheet</h1>
-                    <p><strong>Current Price:</strong> ${p_price:.2f} | <strong>Generated on:</strong> {datetime.now().strftime('%Y-%m-%d')}</p>
-                    
-                    <h3>1. Core Metrics</h3>
-                    <div class="metric-grid">
-                        <div class="metric-box" style="background: {ey_color};">
-                            <strong>Earnings Yield</strong><br><span style="font-size: 24px;">{ey_val*100:.1f}%</span>
-                        </div>
-                        <div class="metric-box" style="background: {fcfy_color};">
-                            <strong>FCF Yield</strong><br><span style="font-size: 24px;">{fcfy_val*100:.1f}%</span>
-                        </div>
-                        <div class="metric-box" style="background: {roic_color};">
-                            <strong>ROIC</strong><br><span style="font-size: 24px;">{p_roic*100:.1f}%</span>
-                        </div>
-                    </div>
-                    
-                    <h3>2. Custom Stress-Test Scenarios</h3>
-                    <table>
-                        <tr><th>Assumption</th><th>User Input Value</th></tr>
-                        <tr><td>Base Growth Rate (Yrs 1-5)</td><td>{base_g*100:.1f}%</td></tr>
-                        <tr><td>Discount Rate (WACC)</td><td>{wacc*100:.1f}%</td></tr>
-                        <tr><td>Terminal Growth</td><td>{term_g*100:.1f}%</td></tr>
-                        <tr><td>Target Exit P/E</td><td>{target_pe:.1f}x</td></tr>
-                        <tr><td><strong>Stress Tests Applied</strong></td><td>
-                            {'📉 Growth Slowed<br>' if stress_growth else ''}
-                            {'🗜️ P/E Compressed<br>' if stress_pe else ''}
-                            {'🌪️ Recession FCF Cut<br>' if stress_recession else ''}
-                            {'<em>None</em>' if not (stress_growth or stress_pe or stress_recession) else ''}
-                        </td></tr>
-                    </table>
-                    
-                    <div class="verdict-box">
-                        <h3 style="margin:0; color: {mos_color};">MARGIN OF SAFETY: {mos_pct:.1f}%</h3>
-                        <h1 style="margin:10px 0; color: {mos_color};">{mos_label}</h1>
-                        <p style="margin:0;">Calculated Intrinsic Value: <strong>${intrinsic_value:.2f}</strong></p>
-                    </div>
-                    
-                    <p style="text-align: center; margin-top: 40px; color: #666; font-size: 12px;">
-                        <em>B.E Research Framework - Strategy: Quality at a Sensible Price</em>
-                    </p>
-                </body>
-                </html>
-                """
+                st.caption("Download your exact scenario as a clean Tear Sheet.")
                 
                 st.download_button(
                     label="📄 Download Valuation Tear Sheet (.html)",
                     data=html_export,
-                    file_name=f"{val_ticker}_Valuation_Tear_Sheet.html",
+                    file_name=f"{val_ticker}_{'MegaCap' if active_fw != 'Classic Value (FCF & P/E)' else 'Classic'}_Tear_Sheet.html",
                     mime="text/html",
                     use_container_width=True
                 )
                 st.caption("💡 *Tip: Open the downloaded file in your browser and press **Ctrl+P** (or Cmd+P) to instantly save it as a beautiful PDF!*")
 
             else:
-                st.error("Failed to load financial data for this ticker. Ensure it is a valid public stock symbol.")
+                st.error("Failed to load financial data. Ensure it is a valid public stock symbol.")
 # ==============================================================================
 # --- TAB 4: AUTOMATED WEEKLY INSIGHTS ---
 # ==============================================================================
