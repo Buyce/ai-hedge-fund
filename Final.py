@@ -1633,16 +1633,17 @@ with tab3:
                     
                     st.markdown("---")
                     st.markdown("### 3️⃣ DCF Stress Tests (Bull, Base, Bear)")
+                    st.warning("⚠️ **DCF Sensitivity Warning:** Intrinsic value is highly sensitive to the Discount Rate and Terminal Growth. Small tweaks here create massive swings in valuation. Always be conservative.")
                     
                     s1, s2, s3 = st.columns(3)
-                    wacc = s2.number_input("Discount Rate %", value=9.0) / 100.0
-                    term_g = s3.number_input("Terminal Growth %", value=3.0) / 100.0
+                    wacc = s2.number_input("Discount Rate (WACC) %", value=9.0, help="The minimum return investors demand. Higher risk companies require a higher discount rate (usually 8-12%), which lowers the current valuation.") / 100.0
+                    term_g = s3.number_input("Terminal Growth %", value=3.0, help="The rate the company will grow into perpetuity after 5 years. This should NEVER exceed long-term GDP growth or inflation (typically 2-3%).") / 100.0
                     
                     st.markdown("##### Adjust Growth Rates (Years 1-5)")
                     g1, g2, g3 = st.columns(3)
-                    g_bull = g1.number_input("🟢 Bull Case Growth %", value=15.0) / 100.0
-                    g_base = g2.number_input("🟡 Base Case Growth %", value=12.0) / 100.0
-                    g_bear = g3.number_input("🔴 Bear Case Growth %", value=6.0) / 100.0
+                    g_bull = g1.number_input("🟢 Bull Case Growth %", value=15.0, help="Best-case scenario for short-term growth.") / 100.0
+                    g_base = g2.number_input("🟡 Base Case Growth %", value=12.0, help="Most realistic, probable growth trajectory.") / 100.0
+                    g_bear = g3.number_input("🔴 Bear Case Growth %", value=6.0, help="Worst-case scenario (recession, loss of market share).") / 100.0
                     
                     def calc_dcf(fcf, g, t_g, dr, shares, n_cash):
                         if dr <= t_g: return 0
@@ -1671,12 +1672,12 @@ with tab3:
                     <div style="border: 2px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center;">
                         <h3 style="margin:0; color: {mos_color};">Base Margin of Safety: {mos_pct:.1f}%</h3>
                         <h1 style="margin:10px 0; font-size: 38px; color: {mos_color};">{mos_label}</h1>
-                        <p style="margin:0; color: #64748b;">(Current Price: ${p_price:.2f} | Base Intrinsic Value: ${val_base:.2f})</p>
+                        <p style="margin:0; color: #64748b; font-size: 16px;">(Current Price: <strong>${p_price:.2f}</strong> | Base Intrinsic Value: <strong>${val_base:.2f}</strong>)</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     # Setup HTML Export for Big Tech
-                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Mega-Cap Tech Valuation</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Cash Engine</h3><div class="grid"><div class="box" style="background:#334;"><strong>Operating CF</strong><br>${p_ocf/1e9:.1f}B</div><div class="box" style="background:#334;"><strong>Free CF</strong><br>${p_fcf/1e9:.1f}B</div><div class="box" style="background:{pocf_color};"><strong>P/OCF</strong><br>{pocfy_val:.1f}x</div></div><h3>DCF Scenarios</h3><table><tr><th>Scenario</th><th>Growth Assumed</th><th>Target Value</th></tr><tr><td>Bull Case</td><td>{g_bull*100:.1f}%</td><td>${val_bull:.2f}</td></tr><tr><td>Base Case</td><td>{g_base*100:.1f}%</td><td>${val_base:.2f}</td></tr><tr><td>Bear Case</td><td>{g_bear*100:.1f}%</td><td>${val_bear:.2f}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2></div></body></html>"""
+                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Mega-Cap Tech Valuation</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Cash Engine</h3><div class="grid"><div class="box" style="background:#334;"><strong>Operating CF</strong><br>${p_ocf/1e9:.1f}B</div><div class="box" style="background:#334;"><strong>Free CF</strong><br>${p_fcf/1e9:.1f}B</div><div class="box" style="background:{pocf_color};"><strong>P/OCF</strong><br>{pocfy_val:.1f}x</div></div><h3>DCF Scenarios</h3><table><tr><th>Scenario</th><th>Growth Assumed</th><th>Target Value</th></tr><tr><td>Bull Case</td><td>{g_bull*100:.1f}%</td><td>${val_bull:.2f}</td></tr><tr><td>Base Case</td><td>{g_base*100:.1f}%</td><td>${val_base:.2f}</td></tr><tr><td>Bear Case</td><td>{g_bear*100:.1f}%</td><td>${val_bear:.2f}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2><p>Intrinsic Value vs Price: <strong>${val_base:.2f}</strong> vs <strong>${p_price:.2f}</strong></p></div></body></html>"""
 
 
                 # ===============================================================================
@@ -1709,6 +1710,7 @@ with tab3:
 
                     st.markdown("---")
                     st.markdown("### 2️⃣ Valuation & Stress Testing")
+                    st.warning("⚠️ **DCF Sensitivity Warning:** Intrinsic value is highly sensitive to the Discount Rate and Terminal Growth. Small tweaks here create massive swings in valuation. Always be conservative.")
                     
                     col_dcf, col_stress = st.columns([2, 1])
                     
@@ -1721,10 +1723,10 @@ with tab3:
                     with col_dcf:
                         st.markdown("##### ⚙️ DCF & Multiple Inputs")
                         c_in1, c_in2, c_in3 = st.columns(3)
-                        base_g = c_in1.number_input("Est. Growth Yrs 1-5 (%)", value=15.0) / 100.0
-                        wacc = c_in2.number_input("Discount Rate (WACC) %", value=9.0) / 100.0
-                        term_g = c_in3.number_input("Terminal Growth %", value=2.5) / 100.0
-                        target_pe = c_in1.number_input("Target Exit P/E", value=float(p_pe) if p_pe > 0 else 20.0)
+                        base_g = c_in1.number_input("Est. Growth Yrs 1-5 (%)", value=15.0, help="Expected annual cash flow growth rate over the next 5 years.") / 100.0
+                        wacc = c_in2.number_input("Discount Rate (WACC) %", value=9.0, help="The required rate of return. Higher risk = higher WACC (usually 8-12%).") / 100.0
+                        term_g = c_in3.number_input("Terminal Growth %", value=2.5, help="Perpetual growth rate after 5 years. Usually matches GDP/Inflation (2-3%). Do not set higher than WACC.") / 100.0
+                        target_pe = c_in1.number_input("Target Exit P/E", value=float(p_pe) if p_pe > 0 else 20.0, help="The expected Price-to-Earnings multiple the market will give this stock in 5 years.")
                         
                         eff_g = base_g - 0.05 if stress_growth else base_g
                         eff_fcf = p_fcf * 0.70 if stress_recession else p_fcf
@@ -1756,11 +1758,12 @@ with tab3:
                     <div style="border: 2px solid {mos_color}; padding: 20px; border-radius: 10px; text-align: center;">
                         <h3 style="margin:0; color: {mos_color};">MOS: {mos_pct:.1f}%</h3>
                         <h1 style="margin:10px 0; font-size: 42px; color: {mos_color};">{mos_label}</h1>
+                        <p style="margin:0; color: #64748b; font-size: 16px;">(Current Price: <strong>${p_price:.2f}</strong> | Intrinsic Value: <strong>${intrinsic_value:.2f}</strong>)</p>
                     </div>
                     """, unsafe_allow_html=True)
                     
                     # Setup HTML Export for Classic Value
-                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Classic Value Tear Sheet</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Core Metrics</h3><div class="grid"><div class="box" style="background:{ey_color};"><strong>Earnings Yield</strong><br>{ey_val*100:.1f}%</div><div class="box" style="background:{fcfy_color};"><strong>FCF Yield</strong><br>{fcfy_val*100:.1f}%</div><div class="box" style="background:{roic_color};"><strong>ROIC</strong><br>{p_roic*100:.1f}%</div></div><h3>Stress-Tested Scenarios</h3><table><tr><th>Assumption</th><th>Value Used</th></tr><tr><td>Growth Assumed</td><td>{eff_g*100:.1f}%</td></tr><tr><td>WACC</td><td>{wacc*100:.1f}%</td></tr><tr><td>Exit P/E</td><td>{eff_exit_pe:.1f}x</td></tr><tr><td><strong>Stress Tests Active</strong></td><td>{'Yes' if (stress_growth or stress_pe or stress_recession) else 'None'}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2><p>Intrinsic Value: ${intrinsic_value:.2f}</p></div></body></html>"""
+                    html_export = f"""<!DOCTYPE html><html><head><meta charset='utf-8'><title>{val_ticker} Valuation</title><style>body {{ font-family: Arial, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; }} .grid {{ display: flex; gap: 20px; }} .box {{ flex: 1; padding: 15px; border-radius: 8px; color: white; text-align: center; margin-bottom: 20px; }} .btn {{ display: block; padding: 15px; background: #2563eb; color: white; text-align: center; text-decoration: none; font-weight: bold; border-radius: 8px; margin-bottom: 30px; }} @media print {{ .btn {{ display: none; }} }} table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; }} th, td {{ border: 1px solid #ddd; padding: 10px; text-align: left; }} th {{ background-color: #f4f4f4; }}</style></head><body><a href="#" class="btn" onclick="window.print()">🖨️ Save as PDF</a><h1>{val_ticker} - Classic Value Tear Sheet</h1><p><strong>Current Price:</strong> ${p_price:.2f}</p><h3>Core Metrics</h3><div class="grid"><div class="box" style="background:{ey_color};"><strong>Earnings Yield</strong><br>{ey_val*100:.1f}%</div><div class="box" style="background:{fcfy_color};"><strong>FCF Yield</strong><br>{fcfy_val*100:.1f}%</div><div class="box" style="background:{roic_color};"><strong>ROIC</strong><br>{p_roic*100:.1f}%</div></div><h3>Stress-Tested Scenarios</h3><table><tr><th>Assumption</th><th>Value Used</th></tr><tr><td>Growth Assumed</td><td>{eff_g*100:.1f}%</td></tr><tr><td>WACC</td><td>{wacc*100:.1f}%</td></tr><tr><td>Exit P/E</td><td>{eff_exit_pe:.1f}x</td></tr><tr><td><strong>Stress Tests Active</strong></td><td>{'Yes' if (stress_growth or stress_pe or stress_recession) else 'None'}</td></tr></table><div style="border: 3px solid {mos_color}; padding: 20px; text-align: center; border-radius: 8px;"><h2 style="color:{mos_color}; margin:0;">VERDICT: {mos_label} ({mos_pct:.1f}% MOS)</h2><p>Intrinsic Value vs Price: <strong>${intrinsic_value:.2f}</strong> vs <strong>${p_price:.2f}</strong></p></div></body></html>"""
 
 
                 # ===============================================================================
