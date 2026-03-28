@@ -1343,6 +1343,10 @@ with tab1:
         needs_concept = any(p in concept_agents for p in selected_prompts)
 
         missing_fields = []
+        # --- ADD THIS BLOCK TO ACTUALLY TRIGGER THE ERROR ---
+        if missing_fields:
+            st.error(f"🛑 **Missing Data:** You selected reports that require you to fill out: {', '.join(missing_fields)}")
+            st.stop()
         if needs_stock and not (target_company.strip() or target_ticker.strip()): missing_fields.append("**Company Name** OR **Ticker Symbol**")
         if needs_industry and not target_industry.strip(): missing_fields.append("**Industry Sector**")
         if needs_ceo and not target_ceo.strip(): missing_fields.append("**CEO's Name**")
