@@ -260,6 +260,81 @@ def update_task_progress(email, pct, detail):
     if email in global_tasks:
         global_tasks[email]["progress_pct"] = max(0.0, min(1.0, pct))
         global_tasks[email]["progress"] = detail
+        
+def execute_standalone_podcast(task_key, ticker, dossier_data, podcast_tier, api_key_google, api_key_11):
+    """Fast-Path Podcast Generator: Bypasses research and feeds saved dossier directly to the audio engine."""
+    update_task_progress(task_key, 0.1, f"Initializing Standalone Podcast for {ticker}...")
+    
+    # Assemble the Context directly from the saved database dossier
+    pod_context = f"=== Business Summary ===\n{dossier_data.get('business_summary', '')}\n\n"
+    pod_context += f"=== Moat Notes ===\n{dossier_data.get('moat_notes', '')}\n\n"
+    pod_context += f"=== Management ===\n{dossier_data.get('management_notes', '')}\n\n"
+    pod_context += f"=== Key Metrics ===\n{dossier_data.get('key_metrics', '')}\n\n"
+    pod_context += f"=== Bull Thesis ===\n{dossier_data.get('thesis', '')}\n\n"
+    pod_context += f"=== Bear Thesis ===\n{dossier_data.get('anti_thesis', '')}\n\n"
+    
+    client = genai.Client(api_key=api_key_google)
+    tier_name = podcast_tier.split('(')[0].strip() if podcast_tier else "Free Tier"
+    
+    # Determine Tier Key
+    if "Ultra" in tier_name: tier_key = "Ultra"
+    elif "Pro" in tier_name: tier_key = "Pro"
+    else: tier_key = "Free"
+
+    update_task_progress(task_key, 0.3, f"Writing {tier_key} Script from existing dossier...")
+    
+    # Grab the exact prompt from the library
+    active_persona = PODCAST_PROMPTS["Company"][tier_key] 
+    
+    # Strict Length Mandates to control API costs
+    length_instructions = {
+        "Free": "CRITICAL LENGTH MANDATE: You MUST keep this script strictly UNDER 750 words (approx 4 to 5 minutes of spoken audio). Be extremely concise, punchy, and high-level.",
+        "Pro": "CRITICAL LENGTH MANDATE: Target exactly 1500 to 1800 words (approx 10 to 12 minutes of audio). Expand heavily on the data.",
+        "Ultra": "CRITICAL LENGTH MANDATE: Target 3000+ words (approx 20+ minutes of audio). THIS IS A MASTERCLASS."
+    }
+    length_constraint = length_instructions[tier_key]
+
+    # Inject variables
+    pod_instr = active_persona.replace("[Company_name]", ticker)
+    prompt_payload = f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\n{length_constraint}\n\nDATA:\n{pod_context}"
+    
+    try:
+        # Generate Script
+        res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt_payload)
+        script_text = res.text.strip()
+        
+        # Render Audio
+        update_task_progress(task_key, 0.6, f"Rendering {tier_name} Audio (This may take several minutes)...")
+        voice_host_a = "29vD33N1CtxCmqQRPOHJ" 
+        voice_host_b = "21m00Tcm4TlvDq8ikWAM" 
+        
+        stitched_audio = b""
+        lines = script_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            
+            target_voice = voice_host_a
+            speak_text = line
+            if line.startswith("[Host A]:"): 
+                target_voice = voice_host_a
+                speak_text = line.replace("[Host A]:", "").strip()
+            elif line.startswith("[Host B]:"): 
+                target_voice = voice_host_b
+                speak_text = line.replace("[Host B]:", "").strip()
+            
+            if speak_text:
+                audio_chunk = generate_elevenlabs_audio(speak_text, target_voice, api_key_11)
+                stitched_audio += audio_chunk
+        
+        if stitched_audio:
+            global_tasks[task_key]["audio_data"] = stitched_audio
+            
+    except Exception as e:
+        global_tasks[task_key]["audio_error"] = str(e)
+    
+    update_task_progress(task_key, 1.0, "Audio Generation Complete.")
+    global_tasks[task_key]["status"] = "complete"
 
 def fetch_info_from_ticker():
     ticker = st.session_state.ticker_input.strip().upper()
@@ -1089,81 +1164,6 @@ with tab1:
                 stock = yf.Ticker(resolved_ticker); info = stock.info
                 yf_context = f"BUSINESS SUMMARY:\n{info.get('longBusinessSummary', 'N/A')}\n\nFINANCIALS:\n{stock.financials.head(15).to_string()}\n"
             except Exception as e: yf_context = f"Could not fetch Market data: {e}"
-
-        def execute_standalone_podcast(task_key, ticker, dossier_data, podcast_tier, api_key_google, api_key_11):
-    """Fast-Path Podcast Generator: Bypasses research and feeds saved dossier directly to the audio engine."""
-    update_task_progress(task_key, 0.1, f"Initializing Standalone Podcast for {ticker}...")
-    
-    # Assemble the Context directly from the saved database dossier
-    pod_context = f"=== Business Summary ===\n{dossier_data.get('business_summary', '')}\n\n"
-    pod_context += f"=== Moat Notes ===\n{dossier_data.get('moat_notes', '')}\n\n"
-    pod_context += f"=== Management ===\n{dossier_data.get('management_notes', '')}\n\n"
-    pod_context += f"=== Key Metrics ===\n{dossier_data.get('key_metrics', '')}\n\n"
-    pod_context += f"=== Bull Thesis ===\n{dossier_data.get('thesis', '')}\n\n"
-    pod_context += f"=== Bear Thesis ===\n{dossier_data.get('anti_thesis', '')}\n\n"
-    
-    client = genai.Client(api_key=api_key_google)
-    tier_name = podcast_tier.split('(')[0].strip() if podcast_tier else "Free Tier"
-    
-    # Determine Tier Key
-    if "Ultra" in tier_name: tier_key = "Ultra"
-    elif "Pro" in tier_name: tier_key = "Pro"
-    else: tier_key = "Free"
-
-    update_task_progress(task_key, 0.3, f"Writing {tier_key} Script from existing dossier...")
-    
-    # Grab the exact prompt from the library
-    active_persona = PODCAST_PROMPTS["Company"][tier_key] 
-    
-    # Strict Length Mandates to control API costs
-    length_instructions = {
-        "Free": "CRITICAL LENGTH MANDATE: You MUST keep this script strictly UNDER 750 words (approx 4 to 5 minutes of spoken audio). Be extremely concise, punchy, and high-level.",
-        "Pro": "CRITICAL LENGTH MANDATE: Target exactly 1500 to 1800 words (approx 10 to 12 minutes of audio). Expand heavily on the data.",
-        "Ultra": "CRITICAL LENGTH MANDATE: Target 3000+ words (approx 20+ minutes of audio). THIS IS A MASTERCLASS."
-    }
-    length_constraint = length_instructions[tier_key]
-
-    # Inject variables
-    pod_instr = active_persona.replace("[Company_name]", ticker)
-    prompt_payload = f"WRITE PODCAST SCRIPT:\n{pod_instr}\n\n{length_constraint}\n\nDATA:\n{pod_context}"
-    
-    try:
-        # Generate Script
-        res = client.models.generate_content(model="gemini-3.1-pro-preview", contents=prompt_payload)
-        script_text = res.text.strip()
-        
-        # Render Audio
-        update_task_progress(task_key, 0.6, f"Rendering {tier_name} Audio (This may take several minutes)...")
-        voice_host_a = "29vD33N1CtxCmqQRPOHJ" 
-        voice_host_b = "21m00Tcm4TlvDq8ikWAM" 
-        
-        stitched_audio = b""
-        lines = script_text.split('\n')
-        for line in lines:
-            line = line.strip()
-            if not line: continue
-            
-            target_voice = voice_host_a
-            speak_text = line
-            if line.startswith("[Host A]:"): 
-                target_voice = voice_host_a
-                speak_text = line.replace("[Host A]:", "").strip()
-            elif line.startswith("[Host B]:"): 
-                target_voice = voice_host_b
-                speak_text = line.replace("[Host B]:", "").strip()
-            
-            if speak_text:
-                audio_chunk = generate_elevenlabs_audio(speak_text, target_voice, api_key_11)
-                stitched_audio += audio_chunk
-        
-        if stitched_audio:
-            global_tasks[task_key]["audio_data"] = stitched_audio
-            
-    except Exception as e:
-        global_tasks[task_key]["audio_error"] = str(e)
-    
-    update_task_progress(task_key, 1.0, "Audio Generation Complete.")
-    global_tasks[task_key]["status"] = "complete"
 
         def fire_agent(agent_name, raw_instruction, extra_context=""):
             instruction = (raw_instruction
